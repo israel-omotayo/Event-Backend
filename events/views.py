@@ -20,6 +20,7 @@ class UserRegistrationView(generics.CreateAPIView):
         responses={201: OpenApiResponse(description="User created with authentication token.")},
     ) # Provides metadata for API documentation, indicating that this endpoint creates a user account and returns a 201 status code with an authentication token upon successful creation
 
+
     def create(self, request, *args, **kwargs): # Overrides the default create method to handle user registration and token generation
 
         serializer = self.get_serializer(data=request.data) # Validates the incoming request data against the UserRegistrationSerializer
@@ -38,23 +39,23 @@ class UserRegistrationView(generics.CreateAPIView):
         )
 
 
-class EventListView(generics.ListAPIView): # Provides a read-only endpoint to list all events
-    queryset = Event.objects.all().order_by("date_time") # Retrieves all events from the database and orders them by their date and time in ascending order
+class EventListView(generics.ListAPIView): # Read-only endpoint 
+    queryset = Event.objects.all().order_by("date_time")
 
     serializer_class = EventSerializer
 
     permission_classes = [AllowAny]
 
 
-class EventDetailView(generics.RetrieveAPIView): # Provides a read-only endpoint to retrieve a single event by its primary key (pk)
-    queryset = Event.objects.all() # Retrieves all events from the database
+class EventDetailView(generics.RetrieveAPIView): # Read-only endpoint for retrieving details via pk 
+    queryset = Event.objects.all()
 
     serializer_class = EventSerializer 
 
     permission_classes = [AllowAny]
 
 
-class EventRegisterView(APIView): # Provides an endpoint for authenticated users to register for an event
+class EventRegisterView(APIView):
 
     permission_classes = [IsAuthenticated]
 
@@ -89,7 +90,7 @@ class EventRegisterView(APIView): # Provides an endpoint for authenticated users
 
         if registration:
             registration.is_cancelled = False
-            registration.save(update_fields=["is_cancelled"]) # Updates the existing registration to mark it as not cancelled if the user had previously cancelled their registration
+            registration.save(update_fields=["is_cancelled"])
 
         else:
             registration = Registration.objects.create(user=request.user, event=event)
@@ -99,7 +100,7 @@ class EventRegisterView(APIView): # Provides an endpoint for authenticated users
         return Response(serializer.data, status=status.HTTP_201_CREATED) # Returns a response with the serialized registration data and the status code indicating that the registration was successfully created
 
 
-class MyRegistrationsView(generics.ListAPIView): # Provides a read-only endpoint to list all active registrations for the authenticated user
+class MyRegistrationsView(generics.ListAPIView): # Read-only endpoint
 
     serializer_class = RegistrationSerializer
 
@@ -112,7 +113,7 @@ class MyRegistrationsView(generics.ListAPIView): # Provides a read-only endpoint
         ).select_related("event") # Retrieves all active registrations for the authenticated user and uses select_related to optimize the database query by fetching related event data in a single query
 
 
-class CancelRegistrationView(APIView): # Provides an endpoint for authenticated users to cancel their registration for an event
+class CancelRegistrationView(APIView):
 
     permission_classes = [IsAuthenticated] 
 
@@ -134,7 +135,7 @@ class CancelRegistrationView(APIView): # Provides an endpoint for authenticated 
         ) # Retrieves the registration with the given primary key (pk) for the authenticated user or returns a 404 error if not found
 
         registration.is_cancelled = True
-        registration.save(update_fields=["is_cancelled"]) # Updates the registration to mark it as cancelled
+        registration.save(update_fields=["is_cancelled"])
 
         serializer = RegistrationSerializer(registration)
         return Response(serializer.data)

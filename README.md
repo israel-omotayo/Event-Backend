@@ -2,7 +2,7 @@
 
 A Django REST Framework backend for managing events and user registrations.
 
-This project was built for CodeAlpha Task 2: Event Registration System.
+This project is a reusable API/backend template for event registration, built with Django REST Framework.
 
 ## Features
 
