@@ -107,3 +107,37 @@ class EventApiTests(APITestCase):
         self.assertEqual(len(list_response.data), 1)
         self.assertEqual(cancel_response.status_code, status.HTTP_200_OK)
         self.assertTrue(registration.is_cancelled)
+
+    def test_cancelled_registration_can_be_reactivated(self):
+        registration = Registration.objects.create(
+            user=self.user,
+            event=self.event,
+            is_cancelled=True,
+        )
+        self.authenticate()
+
+        response = self.client.post(reverse("event-register", args=[self.event.id]))
+
+        registration.refresh_from_db()
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertFalse(registration.is_cancelled)
+        self.assertEqual(
+            Registration.objects.filter(user=self.user, event=self.event).count(),
+            1,
+        )
+
+    def test_cancelled_registration_releases_spot(self):
+        full_event = Event.objects.create(
+            title="One Seat",
+            description="A tiny event.",
+            location="Online",
+            date_time=timezone.now() + timezone.timedelta(days=5),
+            capacity=1,
+        )
+        Registration.objects.create(user=self.user, event=full_event, is_cancelled=True)
+        self.authenticate()
+
+        response = self.client.post(reverse("event-register", args=[full_event.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(full_event.spots_left, 0)

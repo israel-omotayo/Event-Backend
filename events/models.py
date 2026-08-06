@@ -7,12 +7,12 @@ class Event(models.Model):
     title = models.CharField(max_length=255)
     description = models.TextField()
     location = models.CharField(max_length=255)
-    date_time = models.DateTimeField() # Stores the date and time of the event
+    date_time = models.DateTimeField(db_index=True) # Stores the date and time of the event
     capacity = models.PositiveIntegerField(default=100)
-    created_at = models.DateTimeField(auto_now_add=True) # Automaticallys set to the current date and time when the event is created
+    created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ["date_time"] # Orders events by their date and time in ascending order
+        ordering = ["date_time"]
 
     @property # Allows access to the method as an attribute
     def spots_left(self):
@@ -34,12 +34,21 @@ class Registration(models.Model):
         on_delete=models.CASCADE,
         related_name="registrations",
     ) # Establishes a many-to-one relationship with the Event model
+
     registered_at = models.DateTimeField(auto_now_add=True)
     is_cancelled = models.BooleanField(default=False)
 
     class Meta:
-        unique_together = ("user", "event") # Ensures that a user can only register for an event once
         ordering = ["-registered_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "event"],
+                name="unique_user_event_registration",
+            ),
+        ] # Ensures that a user can only register for a specific event once
+        indexes = [
+            models.Index(fields=["event", "user"], name="event_user_reg_idx"),
+        ]
 
     def __str__(self):
         return f"{self.user} - {self.event}" # Returns a string representation showing the user and the event they registered for

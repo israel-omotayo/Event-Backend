@@ -7,6 +7,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from .models import Event, Registration
 from .serializers import EventSerializer, RegistrationSerializer, UserRegistrationSerializer
+from .services import RegistrationError, cancel_registration, register_user_for_event
 
 # Create your views here.
 
@@ -69,31 +70,15 @@ class EventRegisterView(APIView):
         }, # extend schema decorator provides metadata for API documentation
     )
     def post(self, request, pk):
-        event = get_object_or_404(Event, pk=pk) # Retrieves the event with the given primary key (pk) or returns a 404 error if not found
+        get_object_or_404(Event, pk=pk) # Retrieves the event with the given primary key (pk) or returns a 404 error if not found
+        try:
+            registration = register_user_for_event(user=request.user, event_id=pk)
 
-        registration = Registration.objects.filter(
-            user=request.user,
-            event=event,
-        ).first() # Checks if the user is already registered for the event and retrieves the first matching registration if it exists
-
-        if registration and not registration.is_cancelled:
+        except RegistrationError as exc:
             return Response(
-                {"detail": "You are already registered for this event."},
+                {"detail": str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        if event.spots_left <= 0:
-            return Response(
-                {"detail": "No spots left for this event."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        if registration:
-            registration.is_cancelled = False
-            registration.save(update_fields=["is_cancelled"])
-
-        else:
-            registration = Registration.objects.create(user=request.user, event=event)
+            ) # Returns if the user is already registered or if there are no spots left for the event 
 
         serializer = RegistrationSerializer(registration)
 
@@ -134,8 +119,7 @@ class CancelRegistrationView(APIView):
             user=request.user,
         ) # Retrieves the registration with the given primary key (pk) for the authenticated user or returns a 404 error if not found
 
-        registration.is_cancelled = True
-        registration.save(update_fields=["is_cancelled"])
+        registration = cancel_registration(registration=registration)
 
         serializer = RegistrationSerializer(registration)
         return Response(serializer.data)
