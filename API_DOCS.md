@@ -60,7 +60,7 @@ Accept: application/json
 | --- | --- | --- | --- |
 | `POST` | `/auth/register/` | No | Create a user and return an API token |
 | `POST` | `/auth/token/` | No | Login with username/password and return an API token |
-| `GET` | `/events/` | No | List all events |
+| `GET` | `/events/` | No | List events with pagination, search, and date filters |
 | `GET` | `/events/<id>/` | No | View one event |
 | `POST` | `/events/<id>/register/` | Yes | Register the authenticated user for an event |
 | `GET` | `/my-registrations/` | Yes | View active registrations for the authenticated user |
@@ -136,6 +136,39 @@ List events:
 GET /events/
 Accept: application/json
 ```
+
+Example response:
+
+```json
+{
+  "count": 1,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": 1,
+      "title": "Django Workshop",
+      "description": "Build APIs with Django REST Framework.",
+      "location": "Lagos",
+      "date_time": "2026-08-13T10:00:00Z",
+      "capacity": 50,
+      "created_at": "2026-08-06T10:00:00Z",
+      "spots_left": 50
+    }
+  ]
+}
+```
+
+Event list query parameters:
+
+| Parameter | Example | Description |
+| --- | --- | --- |
+| `page` | `/events/?page=2` | Return a specific page |
+| `page_size` | `/events/?page_size=5` | Set page size, up to 100 |
+| `search` | `/events/?search=django` | Search title and description |
+| `timeframe` | `/events/?timeframe=upcoming` | Use `upcoming` or `past` |
+| `date_from` | `/events/?date_from=2026-08-01` | Events on or after this date/datetime |
+| `date_to` | `/events/?date_to=2026-08-31` | Events on or before this date/datetime |
 
 Register for an event:
 

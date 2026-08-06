@@ -15,7 +15,7 @@ class Event(models.Model):
         ordering = ["date_time"]
 
     @property # Allows access to the method as an attribute
-    def spots_left(self):
+    def spots_left(self) -> int:
         active_registrations = self.registrations.filter(is_cancelled=False).count()
         return self.capacity - active_registrations
 

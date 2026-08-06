@@ -34,7 +34,94 @@ class EventApiTests(APITestCase):
         response = self.client.get(reverse("event-list"))
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data[0]["title"], self.event.title)
+        self.assertEqual(response.data["results"][0]["title"], self.event.title)
+        self.assertEqual(response.data["count"], 1)
+
+    def test_event_list_can_be_paginated(self):
+        for index in range(3):
+            Event.objects.create(
+                title=f"Extra Event {index}",
+                description="Another event.",
+                location="Online",
+                date_time=timezone.now() + timezone.timedelta(days=index + 8),
+                capacity=10,
+            )
+
+        response = self.client.get(reverse("event-list"), {"page_size": 2})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 4)
+        self.assertEqual(len(response.data["results"]), 2)
+        self.assertIsNotNone(response.data["next"])
+
+    def test_event_list_can_search_title_and_description(self):
+        Event.objects.create(
+            title="Python Meetup",
+            description="Async workers and background jobs.",
+            location="Online",
+            date_time=timezone.now() + timezone.timedelta(days=8),
+            capacity=10,
+        )
+        Event.objects.create(
+            title="Frontend Summit",
+            description="React and CSS.",
+            location="Online",
+            date_time=timezone.now() + timezone.timedelta(days=9),
+            capacity=10,
+        )
+
+        response = self.client.get(reverse("event-list"), {"search": "async"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["title"], "Python Meetup")
+
+    def test_event_list_can_filter_upcoming_and_past_events(self):
+        Event.objects.create(
+            title="Past Event",
+            description="Already happened.",
+            location="Online",
+            date_time=timezone.now() - timezone.timedelta(days=2),
+            capacity=10,
+        )
+
+        upcoming_response = self.client.get(reverse("event-list"), {"timeframe": "upcoming"})
+        past_response = self.client.get(reverse("event-list"), {"timeframe": "past"})
+
+        self.assertEqual(upcoming_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(past_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(upcoming_response.data["count"], 1)
+        self.assertEqual(upcoming_response.data["results"][0]["title"], self.event.title)
+        self.assertEqual(past_response.data["count"], 1)
+        self.assertEqual(past_response.data["results"][0]["title"], "Past Event")
+
+    def test_event_list_can_filter_by_date_range(self):
+        in_range = Event.objects.create(
+            title="In Range",
+            description="Inside requested range.",
+            location="Online",
+            date_time=timezone.now() + timezone.timedelta(days=14),
+            capacity=10,
+        )
+        Event.objects.create(
+            title="Out of Range",
+            description="Outside requested range.",
+            location="Online",
+            date_time=timezone.now() + timezone.timedelta(days=30),
+            capacity=10,
+        )
+
+        response = self.client.get(
+            reverse("event-list"),
+            {
+                "date_from": (timezone.now() + timezone.timedelta(days=13)).date().isoformat(),
+                "date_to": (timezone.now() + timezone.timedelta(days=15)).date().isoformat(),
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["id"], in_range.id)
 
     def test_user_can_register_and_receive_token(self):
         response = self.client.post(

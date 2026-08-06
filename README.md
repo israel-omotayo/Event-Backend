@@ -6,7 +6,7 @@ This project is a reusable API/backend template for event registration, built wi
 
 ## Features
 
-- Event listing and event detail API endpoints
+- Event listing, event detail, pagination, search, and date filtering
 - User registration and token login
 - Authenticated event registration
 - Authenticated view of a user's active registrations
@@ -112,7 +112,7 @@ Detailed endpoint examples are in `API_DOCS.md`.
 | --- | --- | --- |
 | `POST` | `/auth/register/` | Create a user and return a token |
 | `POST` | `/auth/token/` | Login and return a token |
-| `GET` | `/events/` | List events |
+| `GET` | `/events/` | List paginated events with optional search/date filters |
 | `GET` | `/events/<id>/` | View event details |
 | `POST` | `/events/<id>/register/` | Register for an event |
 | `GET` | `/my-registrations/` | View current user's active registrations |
@@ -123,6 +123,15 @@ Protected endpoints require:
 
 ```http
 Authorization: Token your_token_here
+```
+
+Event list examples:
+
+```http
+GET /events/?page=1&page_size=10
+GET /events/?search=django
+GET /events/?timeframe=upcoming
+GET /events/?date_from=2026-08-01&date_to=2026-08-31
 ```
 
 ## Creating Events
