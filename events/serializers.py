@@ -2,6 +2,7 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.utils import timezone
 
 from .models import Event, Registration
 
@@ -54,6 +55,12 @@ class EventSerializer(serializers.ModelSerializer):
             "spots_left",
         ]
         read_only_fields = ["id", "organizer", "organizer_username", "created_at", "spots_left"]
+
+    def validate_date_time(self, value):
+        if value < timezone.now():
+            raise serializers.ValidationError("Event date and time cannot be in the past.")
+
+        return value
 
 class RegistrationSerializer(serializers.ModelSerializer):
     event_title = serializers.CharField(source="event.title", read_only=True)

@@ -183,6 +183,25 @@ class EventApiTests(APITestCase):
         self.assertEqual(response.data["organizer"], self.user.id)
         self.assertEqual(response.data["organizer_username"], self.user.username)
 
+    def test_organizer_cannot_create_event_in_the_past(self):
+        self.make_organizer(self.user)
+        self.authenticate()
+
+        response = self.client.post(
+            reverse("event-list"),
+            {
+                "title": "Past Event",
+                "description": "This should not be allowed.",
+                "location": "Lagos",
+                "date_time": (timezone.now() - timezone.timedelta(days=1)).isoformat(),
+                "capacity": 20,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("date_time", response.data)
+
     def test_organizer_can_update_own_event(self):
         self.make_organizer(self.user)
         self.event.organizer = self.user
@@ -198,6 +217,23 @@ class EventApiTests(APITestCase):
         self.event.refresh_from_db()
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(self.event.title, "Updated Workshop")
+
+    def test_organizer_cannot_update_event_date_to_the_past(self):
+        self.make_organizer(self.user)
+        self.event.organizer = self.user
+        self.event.save(update_fields=["organizer"])
+        self.authenticate()
+
+        response = self.client.patch(
+            reverse("event-detail", args=[self.event.id]),
+            {"date_time": (timezone.now() - timezone.timedelta(days=1)).isoformat()},
+            format="json",
+        )
+
+        self.event.refresh_from_db()
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("date_time", response.data)
+        self.assertGreater(self.event.date_time, timezone.now())
 
     def test_organizer_can_replace_own_event_with_put(self):
         self.make_organizer(self.user)
@@ -357,6 +393,25 @@ class EventApiTests(APITestCase):
         self.assertTrue(
             Registration.objects.filter(user=self.user, event=self.event, is_cancelled=False).exists()
         )
+
+    def test_authenticated_user_cannot_register_for_past_event(self):
+        past_event = Event.objects.create(
+            title="Already Done",
+            description="This event already happened.",
+            location="Online",
+            date_time=timezone.now() - timezone.timedelta(days=1),
+            capacity=10,
+        )
+        self.authenticate()
+
+        response = self.client.post(reverse("event-register", args=[past_event.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["detail"],
+            "You cannot register for an event that has already passed.",
+        )
+        self.assertFalse(Registration.objects.filter(user=self.user, event=past_event).exists())
 
     def test_anonymous_user_cannot_register_for_event(self):
         response = self.client.post(reverse("event-register", args=[self.event.id]))

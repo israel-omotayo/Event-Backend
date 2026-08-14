@@ -1,4 +1,5 @@
 from django.db import transaction
+from django.utils import timezone
 
 from .models import Event, Registration
 
@@ -22,6 +23,9 @@ def register_user_for_event(*, user, event_id):
 
     if registration and not registration.is_cancelled:
         raise RegistrationError("You are already registered for this event.")
+
+    if event.date_time < timezone.now():
+        raise RegistrationError("You cannot register for a past event.")
 
     if event.spots_left <= 0:
         raise RegistrationError("No spots left for this event.")
