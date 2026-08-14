@@ -4,6 +4,14 @@ from django.conf import settings
 # Create your models here.
 
 class Event(models.Model):
+    organizer = models.ForeignKey(
+        settings.AUTH_USER_MODEL, # Using the custom user model defined in settings.AUTH_USER_MODEL
+        on_delete=models.SET_NULL,
+        related_name="organized_events",
+        null=True,
+        blank=True,
+    ) 
+
     title = models.CharField(max_length=255)
     description = models.TextField()
     location = models.CharField(max_length=255)
@@ -20,7 +28,7 @@ class Event(models.Model):
         return self.capacity - active_registrations
 
     def __str__(self):
-        return self.title # Returns the title of the event when the object is printed or converted to a string
+        return self.title
 
 
 class Registration(models.Model):
@@ -46,9 +54,10 @@ class Registration(models.Model):
                 name="unique_user_event_registration",
             ),
         ] # Ensures that a user can only register for a specific event once
+
         indexes = [
             models.Index(fields=["event", "user"], name="event_user_reg_idx"),
         ]
 
     def __str__(self):
-        return f"{self.user} - {self.event}" # Returns a string representation showing the user and the event they registered for
+        return f"{self.user} - {self.event}"

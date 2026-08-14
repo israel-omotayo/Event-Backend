@@ -5,8 +5,8 @@ from .models import Event, Registration
 
 @admin.register(Event)
 class EventAdmin(admin.ModelAdmin):
-    list_display = ("title", "location", "date_time", "capacity", "spots_left")
-    search_fields = ("title", "location")
+    list_display = ("title", "organizer", "location", "date_time", "capacity", "spots_left")
+    search_fields = ("title", "location", "organizer__username")
     list_filter = ("date_time",)
 
 

@@ -1,10 +1,12 @@
 from django.contrib.auth import get_user_model
+from django.conf import settings
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
-from rest_framework.authtoken.models import Token
 from rest_framework.test import APITestCase
+from rest_framework_simplejwt.tokens import AccessToken
 
+from accounts.models import Profile
 from .models import Event, Registration
 
 
@@ -18,7 +20,6 @@ class EventApiTests(APITestCase):
             email="test@example.com",
             password="password123",
         )
-        self.token = Token.objects.create(user=self.user)
         self.event = Event.objects.create(
             title="Django Workshop",
             description="Build APIs with Django REST Framework.",
@@ -28,7 +29,12 @@ class EventApiTests(APITestCase):
         )
 
     def authenticate(self):
-        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
+        token = AccessToken.for_user(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
+
+    def make_organizer(self, user):
+        user.profile.role = Profile.Role.ORGANIZER
+        user.profile.save(update_fields=["role"])
 
     def test_event_list_is_public(self):
         response = self.client.get(reverse("event-list"))
@@ -123,20 +129,224 @@ class EventApiTests(APITestCase):
         self.assertEqual(response.data["count"], 1)
         self.assertEqual(response.data["results"][0]["id"], in_range.id)
 
-    def test_user_can_register_and_receive_token(self):
+    def test_new_user_profile_defaults_to_attendee(self):
+        new_user = User.objects.create_user(
+            username="attendee",
+            email="attendee@example.com",
+            password="password123",
+        )
+
+        self.assertEqual(new_user.profile.role, Profile.Role.ATTENDEE)
+
+    def test_anonymous_user_can_view_event_detail(self):
+        response = self.client.get(reverse("event-detail", args=[self.event.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["title"], self.event.title)
+
+    def test_attendee_cannot_create_event(self):
+        self.authenticate()
+
         response = self.client.post(
-            reverse("auth-register"),
+            reverse("event-list"),
             {
-                "username": "newuser",
-                "email": "new@example.com",
-                "password": "password123",
+                "title": "Organizer Only",
+                "description": "Attendees cannot create this.",
+                "location": "Lagos",
+                "date_time": (timezone.now() + timezone.timedelta(days=10)).isoformat(),
+                "capacity": 20,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_organizer_can_create_event(self):
+        self.make_organizer(self.user)
+        self.authenticate()
+
+        response = self.client.post(
+            reverse("event-list"),
+            {
+                "title": "Organizer Event",
+                "description": "Created through the API.",
+                "location": "Lagos",
+                "date_time": (timezone.now() + timezone.timedelta(days=10)).isoformat(),
+                "capacity": 20,
             },
             format="json",
         )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertIn("token", response.data)
+        event = Event.objects.get(title="Organizer Event")
+        self.assertEqual(event.organizer, self.user)
+        self.assertEqual(response.data["organizer"], self.user.id)
+        self.assertEqual(response.data["organizer_username"], self.user.username)
+
+    def test_organizer_can_update_own_event(self):
+        self.make_organizer(self.user)
+        self.event.organizer = self.user
+        self.event.save(update_fields=["organizer"])
+        self.authenticate()
+
+        response = self.client.patch(
+            reverse("event-detail", args=[self.event.id]),
+            {"title": "Updated Workshop"},
+            format="json",
+        )
+
+        self.event.refresh_from_db()
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(self.event.title, "Updated Workshop")
+
+    def test_organizer_can_replace_own_event_with_put(self):
+        self.make_organizer(self.user)
+        self.event.organizer = self.user
+        self.event.save(update_fields=["organizer"])
+        self.authenticate()
+
+        response = self.client.put(
+            reverse("event-detail", args=[self.event.id]),
+            {
+                "title": "Full Replace",
+                "description": self.event.description,
+                "location": self.event.location,
+                "date_time": self.event.date_time.isoformat(),
+                "capacity": self.event.capacity,
+            },
+            format="json",
+        )
+
+        self.event.refresh_from_db()
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(self.event.title, "Full Replace")
+
+    def test_organizer_cannot_update_another_organizers_event(self):
+        other_user = User.objects.create_user(username="otherorganizer", password="password123")
+        self.make_organizer(self.user)
+        other_user.profile.role = Profile.Role.ORGANIZER
+        other_user.profile.save(update_fields=["role"])
+        self.event.organizer = other_user
+        self.event.save(update_fields=["organizer"])
+        self.authenticate()
+
+        response = self.client.patch(
+            reverse("event-detail", args=[self.event.id]),
+            {"title": "Hijacked"},
+            format="json",
+        )
+
+        self.event.refresh_from_db()
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertNotEqual(self.event.title, "Hijacked")
+
+    def test_user_can_register_and_receive_jwt_tokens(self):
+        response = self.client.post(
+            reverse("auth-register"),
+            {
+                "username": "newuser",
+                "email": "new@example.com",
+                "password": "StrongPass123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertIn("access", response.data)
+        self.assertIn("refresh", response.data)
         self.assertTrue(User.objects.filter(username="newuser").exists())
+
+    def test_registration_rejects_common_password(self):
+        response = self.client.post(
+            reverse("auth-register"),
+            {
+                "username": "commonuser",
+                "email": "common@example.com",
+                "password": "password123",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("password", response.data)
+        self.assertFalse(User.objects.filter(username="commonuser").exists())
+
+    def test_registration_rejects_numeric_password(self):
+        response = self.client.post(
+            reverse("auth-register"),
+            {
+                "username": "numericuser",
+                "email": "numeric@example.com",
+                "password": "123456789",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("password", response.data)
+        self.assertFalse(User.objects.filter(username="numericuser").exists())
+
+    def test_registration_rejects_password_similar_to_username(self):
+        response = self.client.post(
+            reverse("auth-register"),
+            {
+                "username": "janedoe",
+                "email": "jane@example.com",
+                "password": "janedoe2026",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("password", response.data)
+        self.assertFalse(User.objects.filter(username="janedoe").exists())
+
+    def test_user_can_login_and_refresh_jwt_token(self):
+        login_response = self.client.post(
+            reverse("auth-token"),
+            {
+                "username": self.user.username,
+                "password": "password123",
+            },
+            format="json",
+        )
+
+        refresh_response = self.client.post(
+            reverse("auth-token-refresh"),
+            {"refresh": login_response.data["refresh"]},
+            format="json",
+        )
+
+        self.assertEqual(login_response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", login_response.data)
+        self.assertIn("refresh", login_response.data)
+        self.assertEqual(refresh_response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", refresh_response.data)
+        self.assertIn("refresh", refresh_response.data)
+
+    def test_jwt_settings_are_explicit_and_blacklisting_is_enabled(self):
+        self.assertEqual(settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"], timezone.timedelta(minutes=5))
+        self.assertEqual(settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"], timezone.timedelta(days=1))
+        self.assertTrue(settings.SIMPLE_JWT["ROTATE_REFRESH_TOKENS"])
+        self.assertTrue(settings.SIMPLE_JWT["BLACKLIST_AFTER_ROTATION"])
+        self.assertIn("rest_framework_simplejwt.token_blacklist", settings.INSTALLED_APPS)
+
+    def test_api_defaults_fail_closed_with_jwt_only(self):
+        self.assertEqual(
+            settings.REST_FRAMEWORK["DEFAULT_PERMISSION_CLASSES"],
+            ["rest_framework.permissions.IsAuthenticated"],
+        )
+        self.assertEqual(
+            settings.REST_FRAMEWORK["DEFAULT_AUTHENTICATION_CLASSES"],
+            ["rest_framework_simplejwt.authentication.JWTAuthentication"],
+        )
+
+    def test_schema_and_docs_remain_public(self):
+        schema_response = self.client.get(reverse("schema"))
+        docs_response = self.client.get(reverse("swagger-ui"))
+
+        self.assertEqual(schema_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(docs_response.status_code, status.HTTP_200_OK)
 
     def test_authenticated_user_can_register_for_event(self):
         self.authenticate()

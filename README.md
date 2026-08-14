@@ -7,7 +7,9 @@ This project is a reusable API/backend template for event registration, built wi
 ## Features
 
 - Event listing, event detail, pagination, search, and date filtering
-- User registration and token login
+- User registration and JWT login
+- Attendee and organizer roles
+- Organizer-only event creation and owner-only event updates/deletes
 - Authenticated event registration
 - Authenticated view of a user's active registrations
 - Authenticated registration cancellation
@@ -22,7 +24,7 @@ This project is a reusable API/backend template for event registration, built wi
 - Django
 - Django REST Framework
 - PostgreSQL
-- DRF Token Authentication
+- JWT Authentication
 - drf-spectacular for Swagger/OpenAPI docs
 
 ## Project Structure
@@ -43,6 +45,10 @@ event_reg/
     urls.py
     admin.py
     tests.py
+  accounts/
+    models.py
+    admin.py
+    permissions.py
 ```
 
 ## Setup
@@ -110,20 +116,27 @@ Detailed endpoint examples are in `API_DOCS.md`.
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
-| `POST` | `/auth/register/` | Create a user and return a token |
-| `POST` | `/auth/token/` | Login and return a token |
+| `POST` | `/auth/register/` | Create a user and return JWT access/refresh tokens |
+| `POST` | `/auth/token/` | Login and return JWT access/refresh tokens |
+| `POST` | `/auth/token/refresh/` | Refresh a JWT access token |
 | `GET` | `/events/` | List paginated events with optional search/date filters |
+| `POST` | `/events/` | Create an event as an organizer |
 | `GET` | `/events/<id>/` | View event details |
+| `PUT` | `/events/<id>/` | Replace an event as its organizer |
+| `PATCH` | `/events/<id>/` | Update an event as its organizer |
+| `DELETE` | `/events/<id>/` | Delete an event as its organizer |
 | `POST` | `/events/<id>/register/` | Register for an event |
 | `GET` | `/my-registrations/` | View current user's active registrations |
 | `POST` | `/registrations/<id>/cancel/` | Cancel a registration |
 | `GET` | `/admin/` | Django admin panel |
 
-Protected endpoints require:
+JWT login returns an `access` token and a `refresh` token. Protected endpoints require:
 
 ```http
-Authorization: Token your_token_here
+Authorization: Bearer your_access_token_here
 ```
+
+JWT access tokens last 5 minutes. Refresh tokens last 1 day, rotate on refresh, and old refresh tokens are blacklisted after rotation.
 
 Event list examples:
 
@@ -134,9 +147,11 @@ GET /events/?timeframe=upcoming
 GET /events/?date_from=2026-08-01&date_to=2026-08-31
 ```
 
+New users start as attendees. To create, update, or delete events through the API, promote the user to organizer from the Django admin profile page.
+
 ## Creating Events
 
-Events are created in the Django admin panel:
+Events can be created by organizers through the API or by admins in the Django admin panel:
 
 ```txt
 http://127.0.0.1:8000/admin/

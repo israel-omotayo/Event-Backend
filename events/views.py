@@ -6,11 +6,12 @@ from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import generics, status
-from rest_framework.authtoken.models import Token
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.tokens import RefreshToken
+from accounts.permissions import IsOrganizer, IsOrganizerOwner
 from .models import Event, Registration
 from .serializers import EventSerializer, RegistrationSerializer, UserRegistrationSerializer
 from .services import RegistrationError, cancel_registration, register_user_for_event
@@ -30,7 +31,7 @@ class UserRegistrationView(generics.CreateAPIView):
 
     @extend_schema(
         summary="Create a user account",
-        responses={201: OpenApiResponse(description="User created with authentication token.")},
+        responses={201: OpenApiResponse(description="User created with JWT access and refresh tokens.")},
     )
 
 
@@ -40,13 +41,15 @@ class UserRegistrationView(generics.CreateAPIView):
         serializer.is_valid(raise_exception=True)
         
         user = serializer.save()
-        token, _ = Token.objects.get_or_create(user=user) # Generates an authentication token for the newly created user, or retrieves an existing token if one already exists
+
+        refresh = RefreshToken.for_user(user) # Generates a new refresh token for the newly created user
         return Response(
             {
                 "id": user.id,
                 "username": user.username,
                 "email": user.email,
-                "token": token.key,
+                "access": str(refresh.access_token),
+                "refresh": str(refresh),
             },
             status=status.HTTP_201_CREATED,
         )
@@ -74,13 +77,17 @@ def _parse_datetime_param(value, *, end_of_day=False):
     return parsed
 
 
-class EventListView(generics.ListAPIView): # Read-only endpoint
+class EventListView(generics.ListCreateAPIView):
 
     serializer_class = EventSerializer
 
-    permission_classes = [AllowAny]
-
     pagination_class = EventPagination
+
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [AllowAny()]
+
+        return [IsAuthenticated(), IsOrganizer()]
 
     @extend_schema(
         parameters=[
@@ -124,13 +131,20 @@ class EventListView(generics.ListAPIView): # Read-only endpoint
 
         return queryset
 
+    def perform_create(self, serializer): # Overrides the default perform_create method so as to automacally set the current authenticated user as the organizer
+        serializer.save(organizer=self.request.user)
 
-class EventDetailView(generics.RetrieveAPIView): # Read-only endpoint for retrieving details via pk 
+
+class EventDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Event.objects.all()
 
     serializer_class = EventSerializer 
 
-    permission_classes = [AllowAny]
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [AllowAny()]
+
+        return [IsAuthenticated(), IsOrganizerOwner()]
 
 
 class EventRegisterView(APIView):
