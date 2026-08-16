@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
 from django.conf import settings
+from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
@@ -276,7 +277,8 @@ class EventApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertNotEqual(self.event.title, "Hijacked")
 
-    def test_user_can_register_and_receive_jwt_tokens(self):
+    @override_settings(DEBUG=True)
+    def test_user_registration_requires_email_verification_before_jwt_tokens(self):
         response = self.client.post(
             reverse("auth-register"),
             {
@@ -288,9 +290,11 @@ class EventApiTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertIn("access", response.data)
-        self.assertIn("refresh", response.data)
-        self.assertTrue(User.objects.filter(username="newuser").exists())
+        self.assertNotIn("access", response.data)
+        self.assertNotIn("refresh", response.data)
+        new_user = User.objects.get(username="newuser")
+        self.assertFalse(new_user.is_active)
+        self.assertIsNotNone(new_user.profile.email_verification_code_hash)
 
     def test_registration_rejects_common_password(self):
         response = self.client.post(
@@ -341,7 +345,7 @@ class EventApiTests(APITestCase):
         login_response = self.client.post(
             reverse("auth-token"),
             {
-                "username": self.user.username,
+                "email": self.user.email,
                 "password": "password123",
             },
             format="json",
@@ -361,7 +365,7 @@ class EventApiTests(APITestCase):
         self.assertIn("refresh", refresh_response.data)
 
     def test_jwt_settings_are_explicit_and_blacklisting_is_enabled(self):
-        self.assertEqual(settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"], timezone.timedelta(minutes=5))
+        self.assertEqual(settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"], timezone.timedelta(minutes=60))
         self.assertEqual(settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"], timezone.timedelta(days=1))
         self.assertTrue(settings.SIMPLE_JWT["ROTATE_REFRESH_TOKENS"])
         self.assertTrue(settings.SIMPLE_JWT["BLACKLIST_AFTER_ROTATION"])
@@ -409,7 +413,7 @@ class EventApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(
             response.data["detail"],
-            "You cannot register for an event that has already passed.",
+            "You cannot register for a past event.",
         )
         self.assertFalse(Registration.objects.filter(user=self.user, event=past_event).exists())
 

@@ -18,8 +18,15 @@ class Profile(models.Model):
         choices=Role.choices,
         default=Role.ATTENDEE,
     )
+    email_verification_code_hash = models.CharField(max_length=64, null=True, blank=True)
+    email_verification_sent_at = models.DateTimeField(null=True, blank=True)
+    email_verification_attempts = models.PositiveSmallIntegerField(default=0)
+    email_verification_resend_count = models.PositiveIntegerField(default=0)
+    email_verification_cooldown_until = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    MAX_EMAIL_VERIFICATION_ATTEMPTS = 5
 
     def __str__(self):
         return f"{self.user} - {self.role}"

@@ -10,10 +10,9 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework_simplejwt.tokens import RefreshToken
 from accounts.permissions import IsOrganizer, IsOrganizerOwner
 from .models import Event, Registration
-from .serializers import EventSerializer, RegistrationSerializer, UserRegistrationSerializer
+from .serializers import EventSerializer, RegistrationSerializer
 from .services import RegistrationError, cancel_registration, register_user_for_event
 
 # Create your views here.
@@ -23,37 +22,6 @@ class EventPagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = "page_size"
     max_page_size = 100
-
-class UserRegistrationView(generics.CreateAPIView):
-
-    serializer_class = UserRegistrationSerializer
-    permission_classes = [AllowAny]
-
-    @extend_schema(
-        summary="Create a user account",
-        responses={201: OpenApiResponse(description="User created with JWT access and refresh tokens.")},
-    )
-
-
-    def create(self, request, *args, **kwargs): # Overrides the default create method to handle user registration and token generation
-
-        serializer = self.get_serializer(data=request.data) # Validates the incoming request data against the UserRegistrationSerializer
-        serializer.is_valid(raise_exception=True)
-        
-        user = serializer.save()
-
-        refresh = RefreshToken.for_user(user) # Generates a new refresh token for the newly created user
-        return Response(
-            {
-                "id": user.id,
-                "username": user.username,
-                "email": user.email,
-                "access": str(refresh.access_token),
-                "refresh": str(refresh),
-            },
-            status=status.HTTP_201_CREATED,
-        )
-
 
 def _parse_datetime_param(value, *, end_of_day=False):
     """

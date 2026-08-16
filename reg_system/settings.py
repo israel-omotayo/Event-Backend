@@ -132,6 +132,16 @@ STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "Event API <noreply@example.com>")
+EMAIL_BACKEND = os.environ.get(
+    "EMAIL_BACKEND",
+    "django.core.mail.backends.console.EmailBackend",
+)
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+EMAIL_VERIFICATION_CODE_LIFETIME = timedelta(minutes=10)
+EMAIL_VERIFICATION_RESEND_COOLDOWN = timedelta(minutes=1)
+EMAIL_VERIFICATION_MAX_RESEND_COOLDOWN = timedelta(days=1)
+
 REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 
