@@ -45,4 +45,21 @@ class Migration(migrations.Migration):
                 'constraints': [models.UniqueConstraint(fields=('user', 'event'), name='unique_user_event_registration')],
             },
         ),
+        migrations.CreateModel(
+            name='WaitlistEntry',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('status', models.CharField(choices=[('waiting', 'Waiting'), ('promoted', 'Promoted'), ('cancelled', 'Cancelled')], default='waiting', max_length=20)),
+                ('created_at', models.DateTimeField(auto_now_add=True)),
+                ('updated_at', models.DateTimeField(auto_now=True)),
+                ('promoted_at', models.DateTimeField(blank=True, null=True)),
+                ('event', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='waitlist_entries', to='events.event')),
+                ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='waitlist_entries', to=settings.AUTH_USER_MODEL)),
+            ],
+            options={
+                'ordering': ['created_at'],
+                'indexes': [models.Index(fields=['event', 'status', 'created_at'], name='event_waitlist_idx'), models.Index(fields=['user', 'status'], name='user_waitlist_idx')],
+                'constraints': [models.UniqueConstraint(condition=models.Q(('status', 'waiting')), fields=('user', 'event'), name='unique_waiting_user_event')],
+            },
+        ),
     ]

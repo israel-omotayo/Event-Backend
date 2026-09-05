@@ -27,6 +27,10 @@ class Event(models.Model):
         active_registrations = self.registrations.filter(is_cancelled=False).count()
         return self.capacity - active_registrations
 
+    @property
+    def is_full(self) -> bool:
+        return self.spots_left <= 0
+
     def __str__(self):
         return self.title
 
@@ -61,3 +65,61 @@ class Registration(models.Model):
 
     def __str__(self):
         return f"{self.user} - {self.event}"
+
+
+class WaitlistEntry(models.Model):
+    class Status(models.TextChoices):
+        WAITING = "waiting", "Waiting"
+        PROMOTED = "promoted", "Promoted"
+        CANCELLED = "cancelled", "Cancelled"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="waitlist_entries",
+    )
+    event = models.ForeignKey(
+        Event,
+        on_delete=models.CASCADE,
+        related_name="waitlist_entries",
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.WAITING,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    promoted_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "event"],
+                condition=models.Q(status="waiting"),
+                name="unique_waiting_user_event",
+            ), # Ensures that a user can only have one active waitlist entry for a specific event
+        ]
+        indexes = [
+            models.Index(fields=["event", "status", "created_at"], name="event_waitlist_idx"),
+            models.Index(fields=["user", "status"], name="user_waitlist_idx"),
+        ] # Indexes for efficient querying of waitlist entries based on event, status, and creation time
+
+    @property
+    def position(self) -> int | None:
+        if self.status != self.Status.WAITING:
+            return None
+
+        return (
+            WaitlistEntry.objects.filter(
+                event=self.event,
+                status=self.Status.WAITING,
+                created_at__lte=self.created_at,
+            )
+            .order_by("created_at", "id")
+            .count()
+        ) 
+
+    def __str__(self):
+        return f"{self.user} - {self.event} ({self.status})"

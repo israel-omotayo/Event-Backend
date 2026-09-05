@@ -14,7 +14,10 @@ import os
 from datetime import timedelta
 from pathlib import Path
 
+import sentry_sdk
 from dotenv import load_dotenv
+from sentry_sdk.integrations.django import DjangoIntegration
+from sentry_sdk.integrations.logging import LoggingIntegration
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -31,6 +34,25 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "django-rest-framework-secret-key")
 DEBUG = os.environ.get("DEBUG", "True").lower() == "true"
 
 ALLOWED_HOSTS = []
+
+SENTRY_DSN = os.environ.get("SENTRY_DSN", "")
+SENTRY_ENVIRONMENT = os.environ.get(
+    "SENTRY_ENVIRONMENT",
+    "development" if DEBUG else "production",
+)
+SENTRY_TRACES_SAMPLE_RATE = float(os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0"))
+
+if SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        environment=SENTRY_ENVIRONMENT,
+        integrations=[
+            DjangoIntegration(),
+            LoggingIntegration(level=None, event_level="ERROR"),
+        ],
+        send_default_pii=False,
+        traces_sample_rate=SENTRY_TRACES_SAMPLE_RATE,
+    )
 
 
 # Application definition
@@ -93,6 +115,15 @@ DATABASES = {
     }
 }
 
+# put the SSL mode to require if not using a local database for secure connections to the database
+POSTGRES_SSLMODE = os.environ.get("POSTGRES_SSLMODE", "")
+POSTGRES_HOST = DATABASES["default"]["HOST"]
+POSTGRES_LOCAL_DATABASE = POSTGRES_HOST in {"", "localhost", "127.0.0.1"}
+if POSTGRES_SSLMODE and not POSTGRES_LOCAL_DATABASE:
+    DATABASES["default"]["OPTIONS"] = {
+        "sslmode": POSTGRES_SSLMODE,
+    }
+
 
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
@@ -141,6 +172,81 @@ RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 EMAIL_VERIFICATION_CODE_LIFETIME = timedelta(minutes=10)
 EMAIL_VERIFICATION_RESEND_COOLDOWN = timedelta(minutes=1)
 EMAIL_VERIFICATION_MAX_RESEND_COOLDOWN = timedelta(days=1)
+
+HUEY_CONNECTION = {
+    "dbname": DATABASES["default"]["NAME"],
+    "user": DATABASES["default"]["USER"],
+    "password": DATABASES["default"]["PASSWORD"],
+    "host": DATABASES["default"]["HOST"],
+    "port": DATABASES["default"]["PORT"],
+}
+if POSTGRES_SSLMODE and not POSTGRES_LOCAL_DATABASE:
+    HUEY_CONNECTION["sslmode"] = POSTGRES_SSLMODE
+
+HUEY_IMMEDIATE = os.environ.get("HUEY_IMMEDIATE")
+if HUEY_IMMEDIATE is None:
+    HUEY_IMMEDIATE = DEBUG or POSTGRES_LOCAL_DATABASE
+else:
+    HUEY_IMMEDIATE = HUEY_IMMEDIATE.lower() == "true"
+
+HUEY = {
+    "name": os.environ.get("HUEY_NAME", "event-api"),
+    "huey_class": "huey.PostgresHuey",
+    "connection": HUEY_CONNECTION,
+    "immediate": HUEY_IMMEDIATE,
+    "results": False,
+    "consumer": {
+        "workers": int(os.environ.get("HUEY_WORKERS", "1")),
+        "worker_type": os.environ.get("HUEY_WORKER_TYPE", "thread"),
+    },
+}
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "console": {
+            "format": "%(asctime)s %(levelname)s %(name)s %(message)s",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "console",
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": os.environ.get("LOG_LEVEL", "INFO"),
+    },
+    "loggers": {
+        "django": {
+            "handlers": ["console"],
+            "level": os.environ.get("DJANGO_LOG_LEVEL", "INFO"),
+            "propagate": False,
+        },
+        "django.request": {
+            "handlers": ["console"],
+            "level": "WARNING",
+            "propagate": False,
+        },
+        "huey": {
+            "handlers": ["console"],
+            "level": os.environ.get("HUEY_LOG_LEVEL", "INFO"),
+            "propagate": False,
+        },
+        "accounts": {
+            "handlers": ["console"],
+            "level": os.environ.get("APP_LOG_LEVEL", "INFO"),
+            "propagate": False,
+        },
+        "events": {
+            "handlers": ["console"],
+            "level": os.environ.get("APP_LOG_LEVEL", "INFO"),
+            "propagate": False,
+        },
+    },
+}
 
 REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",

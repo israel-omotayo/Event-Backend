@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
 from django.conf import settings
 from django.test import override_settings
@@ -8,7 +10,7 @@ from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import AccessToken
 
 from accounts.models import Profile
-from .models import Event, Registration
+from .models import Event, Registration, WaitlistEntry
 
 
 User = get_user_model()
@@ -43,6 +45,7 @@ class EventApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["results"][0]["title"], self.event.title)
         self.assertEqual(response.data["count"], 1)
+        self.assertFalse(response.data["results"][0]["is_full"])
 
     def test_event_list_can_be_paginated(self):
         for index in range(3):
@@ -391,12 +394,16 @@ class EventApiTests(APITestCase):
     def test_authenticated_user_can_register_for_event(self):
         self.authenticate()
 
-        response = self.client.post(reverse("event-register", args=[self.event.id]))
+        with patch("events.services.send_registration_confirmed_email_task") as send_email_task:
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(reverse("event-register", args=[self.event.id]))
 
+        registration = Registration.objects.get(user=self.user, event=self.event, is_cancelled=False)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertTrue(
             Registration.objects.filter(user=self.user, event=self.event, is_cancelled=False).exists()
         )
+        send_email_task.assert_called_once_with(registration.id)
 
     def test_authenticated_user_cannot_register_for_past_event(self):
         past_event = Event.objects.create(
@@ -449,14 +456,260 @@ class EventApiTests(APITestCase):
         response = self.client.post(reverse("event-register", args=[full_event.id]))
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data["detail"], "No spots left for this event.")
+        self.assertEqual(response.data["detail"], "Event is full. Join the waitlist instead.")
+        self.assertEqual(response.data["code"], "event_full")
+        self.assertFalse(WaitlistEntry.objects.filter(user=self.user, event=full_event).exists())
+
+    def test_event_detail_shows_full_event(self):
+        other_user = User.objects.create_user(username="fulluser", password="password123")
+        full_event = Event.objects.create(
+            title="Full Session",
+            description="A full event.",
+            location="Online",
+            date_time=timezone.now() + timezone.timedelta(days=3),
+            capacity=1,
+        )
+        Registration.objects.create(user=other_user, event=full_event)
+
+        response = self.client.get(reverse("event-detail", args=[full_event.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["spots_left"], 0)
+        self.assertTrue(response.data["is_full"])
+
+    def test_authenticated_user_can_join_waitlist_for_full_event(self):
+        other_user = User.objects.create_user(username="registered", password="password123")
+        full_event = Event.objects.create(
+            title="Waitlist Session",
+            description="A full event.",
+            location="Online",
+            date_time=timezone.now() + timezone.timedelta(days=3),
+            capacity=1,
+        )
+        Registration.objects.create(user=other_user, event=full_event)
+        self.authenticate()
+
+        with patch("events.services.send_waitlist_joined_email_task") as send_email_task:
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(reverse("event-waitlist", args=[full_event.id]))
+
+        waitlist_entry = WaitlistEntry.objects.get(user=self.user, event=full_event)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["status"], "waitlisted")
+        self.assertEqual(response.data["waitlist_entry"]["position"], 1)
+        self.assertEqual(waitlist_entry.status, WaitlistEntry.Status.WAITING)
+        send_email_task.assert_called_once_with(waitlist_entry.id)
+
+    def test_user_cannot_join_waitlist_twice(self):
+        other_user = User.objects.create_user(username="registered", password="password123")
+        full_event = Event.objects.create(
+            title="Duplicate Waitlist",
+            description="A full event.",
+            location="Online",
+            date_time=timezone.now() + timezone.timedelta(days=3),
+            capacity=1,
+        )
+        Registration.objects.create(user=other_user, event=full_event)
+        WaitlistEntry.objects.create(user=self.user, event=full_event)
+        self.authenticate()
+
+        response = self.client.post(reverse("event-waitlist", args=[full_event.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], "You are already on the waitlist for this event.")
+        self.assertEqual(WaitlistEntry.objects.filter(user=self.user, event=full_event).count(), 1)
+
+    def test_user_cannot_join_waitlist_when_event_has_spots(self):
+        self.authenticate()
+
+        response = self.client.post(reverse("event-waitlist", args=[self.event.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], "Event still has available spots. Register instead.")
+
+    def test_user_cannot_join_waitlist_when_already_registered(self):
+        Registration.objects.create(user=self.user, event=self.event)
+        self.authenticate()
+
+        response = self.client.post(reverse("event-waitlist", args=[self.event.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], "You are already registered for this event.")
+
+    def test_user_cannot_join_waitlist_for_past_event(self):
+        past_event = Event.objects.create(
+            title="Past Full Session",
+            description="Already happened.",
+            location="Online",
+            date_time=timezone.now() - timezone.timedelta(days=1),
+            capacity=0,
+        )
+        self.authenticate()
+
+        response = self.client.post(reverse("event-waitlist", args=[past_event.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], "You cannot join the waitlist for a past event.")
+
+    def test_user_can_view_own_waitlist_entries_with_positions(self):
+        other_user = User.objects.create_user(username="registered", password="password123")
+        waitlisted_user = User.objects.create_user(username="firstwait", password="password123")
+        full_event = Event.objects.create(
+            title="My Waitlist Session",
+            description="A full event.",
+            location="Online",
+            date_time=timezone.now() + timezone.timedelta(days=3),
+            capacity=1,
+        )
+        Registration.objects.create(user=other_user, event=full_event)
+        WaitlistEntry.objects.create(user=waitlisted_user, event=full_event)
+        WaitlistEntry.objects.create(user=self.user, event=full_event)
+        self.authenticate()
+
+        response = self.client.get(reverse("my-waitlist"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["event_title"], full_event.title)
+        self.assertEqual(response.data[0]["position"], 2)
+
+    def test_user_can_cancel_own_waitlist_entry(self):
+        full_event = Event.objects.create(
+            title="Cancel Waitlist Session",
+            description="A full event.",
+            location="Online",
+            date_time=timezone.now() + timezone.timedelta(days=3),
+            capacity=1,
+        )
+        waitlist_entry = WaitlistEntry.objects.create(user=self.user, event=full_event)
+        self.authenticate()
+
+        with patch("events.services.send_waitlist_cancelled_email_task") as send_email_task:
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(reverse("waitlist-cancel", args=[waitlist_entry.id]))
+
+        waitlist_entry.refresh_from_db()
+        my_waitlist_response = self.client.get(reverse("my-waitlist"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], WaitlistEntry.Status.CANCELLED)
+        self.assertIsNone(response.data["position"])
+        self.assertEqual(waitlist_entry.status, WaitlistEntry.Status.CANCELLED)
+        self.assertEqual(my_waitlist_response.data, [])
+        send_email_task.assert_called_once_with(waitlist_entry.id)
+
+    def test_user_cannot_cancel_promoted_waitlist_entry(self):
+        full_event = Event.objects.create(
+            title="Promoted Waitlist Session",
+            description="A full event.",
+            location="Online",
+            date_time=timezone.now() + timezone.timedelta(days=3),
+            capacity=1,
+        )
+        waitlist_entry = WaitlistEntry.objects.create(
+            user=self.user,
+            event=full_event,
+            status=WaitlistEntry.Status.PROMOTED,
+        )
+        self.authenticate()
+
+        response = self.client.post(reverse("waitlist-cancel", args=[waitlist_entry.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], "Only active waitlist entries can be cancelled.")
+
+    def test_user_cannot_cancel_another_users_waitlist_entry(self):
+        other_user = User.objects.create_user(username="otherwait", password="password123")
+        full_event = Event.objects.create(
+            title="Other Waitlist Session",
+            description="A full event.",
+            location="Online",
+            date_time=timezone.now() + timezone.timedelta(days=3),
+            capacity=1,
+        )
+        waitlist_entry = WaitlistEntry.objects.create(user=other_user, event=full_event)
+        self.authenticate()
+
+        response = self.client.post(reverse("waitlist-cancel", args=[waitlist_entry.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_cancelling_registration_promotes_oldest_waitlisted_user(self):
+        full_event = Event.objects.create(
+            title="Promotion Session",
+            description="A full event.",
+            location="Online",
+            date_time=timezone.now() + timezone.timedelta(days=3),
+            capacity=1,
+        )
+        registration = Registration.objects.create(user=self.user, event=full_event)
+        first_waitlisted = User.objects.create_user(username="firstwaitlisted", password="password123")
+        second_waitlisted = User.objects.create_user(username="secondwaitlisted", password="password123")
+        first_entry = WaitlistEntry.objects.create(user=first_waitlisted, event=full_event)
+        second_entry = WaitlistEntry.objects.create(user=second_waitlisted, event=full_event)
+        self.authenticate()
+
+        with (
+            patch("events.services.send_registration_cancelled_email_task") as send_cancelled_email_task,
+            patch("events.services.send_waitlist_promoted_email_task") as send_promoted_email_task,
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(
+                    reverse("registration-cancel", args=[registration.id]),
+                    {"confirm": True},
+                    format="json",
+                )
+
+        registration.refresh_from_db()
+        first_entry.refresh_from_db()
+        second_entry.refresh_from_db()
+        promoted_registration = Registration.objects.get(
+            user=first_waitlisted,
+            event=full_event,
+            is_cancelled=False,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(registration.is_cancelled)
+        self.assertTrue(
+            Registration.objects.filter(
+                user=first_waitlisted,
+                event=full_event,
+                is_cancelled=False,
+            ).exists()
+        )
+        self.assertEqual(first_entry.status, WaitlistEntry.Status.PROMOTED)
+        self.assertIsNotNone(first_entry.promoted_at)
+        self.assertEqual(second_entry.status, WaitlistEntry.Status.WAITING)
+        self.assertEqual(response.data["promoted_registration"]["id"], promoted_registration.id)
+        send_cancelled_email_task.assert_called_once_with(registration.id)
+        send_promoted_email_task.assert_called_once_with(promoted_registration.id)
+
+    def test_registration_cancel_requires_confirmation(self):
+        registration = Registration.objects.create(user=self.user, event=self.event)
+        self.authenticate()
+
+        response = self.client.post(reverse("registration-cancel", args=[registration.id]))
+
+        registration.refresh_from_db()
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["detail"],
+            "Cancelling releases your spot. It will not be reserved for you.",
+        )
+        self.assertEqual(response.data["code"], "confirmation_required")
+        self.assertFalse(registration.is_cancelled)
 
     def test_user_can_view_and_cancel_own_registration(self):
         registration = Registration.objects.create(user=self.user, event=self.event)
         self.authenticate()
 
         list_response = self.client.get(reverse("my-registrations"))
-        cancel_response = self.client.post(reverse("registration-cancel", args=[registration.id]))
+        cancel_response = self.client.post(
+            reverse("registration-cancel", args=[registration.id]),
+            {"confirm": True},
+            format="json",
+        )
 
         registration.refresh_from_db()
         self.assertEqual(list_response.status_code, status.HTTP_200_OK)

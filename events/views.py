@@ -11,9 +11,21 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from accounts.permissions import IsOrganizer, IsOrganizerOwner
-from .models import Event, Registration
-from .serializers import EventSerializer, RegistrationSerializer
-from .services import RegistrationError, cancel_registration, register_user_for_event
+from .models import Event, Registration, WaitlistEntry
+from .serializers import (
+    EventSerializer,
+    RegistrationCancelSerializer,
+    RegistrationSerializer,
+    WaitlistEntrySerializer,
+)
+from .services import (
+    RegistrationError,
+    WaitlistError,
+    cancel_registration,
+    cancel_waitlist_entry,
+    join_event_waitlist,
+    register_user_for_event,
+)
 
 # Create your views here.
 
@@ -134,8 +146,12 @@ class EventRegisterView(APIView):
             registration = register_user_for_event(user=request.user, event_id=pk)
 
         except RegistrationError as exc:
+            response_data = {"detail": str(exc)}
+            if str(exc) == "Event is full. Join the waitlist instead.":
+                response_data["code"] = "event_full"
+
             return Response(
-                {"detail": str(exc)},
+                response_data,
                 status=status.HTTP_400_BAD_REQUEST,
             ) # Returns if the user is already registered or if there are no spots left for the event 
 
@@ -157,15 +173,96 @@ class MyRegistrationsView(generics.ListAPIView): # Read-only endpoint
         ).select_related("event") # Retrieves all active registrations for the authenticated user and uses select_related to optimize the database query by fetching related event data in a single query
 
 
+class EventWaitlistView(APIView):
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        summary="Join an event waitlist",
+        request=None,
+        responses={
+            201: WaitlistEntrySerializer,
+            400: OpenApiResponse(description="Cannot join waitlist."),
+            401: OpenApiResponse(description="Authentication credentials were not provided."),
+        },
+    )
+    def post(self, request, pk):
+        get_object_or_404(Event, pk=pk)
+        try:
+            waitlist_entry = join_event_waitlist(user=request.user, event_id=pk)
+        except WaitlistError as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = WaitlistEntrySerializer(waitlist_entry)
+        return Response(
+            {
+                "status": "waitlisted",
+                "detail": "You have joined the waitlist.",
+                "waitlist_entry": serializer.data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class CancelWaitlistEntryView(APIView):
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        summary="Cancel a waitlist entry",
+        request=None,
+        responses={
+            200: WaitlistEntrySerializer,
+            400: OpenApiResponse(description="Waitlist entry cannot be cancelled."),
+            401: OpenApiResponse(description="Authentication credentials were not provided."),
+            404: OpenApiResponse(description="Waitlist entry not found."),
+        },
+    )
+    def post(self, request, pk):
+        waitlist_entry = get_object_or_404(
+            WaitlistEntry,
+            pk=pk,
+            user=request.user,
+        )
+
+        try:
+            waitlist_entry = cancel_waitlist_entry(waitlist_entry=waitlist_entry)
+        except WaitlistError as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = WaitlistEntrySerializer(waitlist_entry)
+        return Response(serializer.data)
+
+
+class MyWaitlistView(generics.ListAPIView):
+
+    serializer_class = WaitlistEntrySerializer
+
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return WaitlistEntry.objects.filter(
+            user=self.request.user,
+            status=WaitlistEntry.Status.WAITING,
+        ).select_related("event")
+
+
 class CancelRegistrationView(APIView):
 
     permission_classes = [IsAuthenticated] 
 
     @extend_schema(
         summary="Cancel a registration",
-        request=None,
+        request=RegistrationCancelSerializer,
         responses={
             200: RegistrationSerializer,
+            400: OpenApiResponse(description="Confirmation required."),
             401: OpenApiResponse(description="Authentication credentials were not provided."),
             404: OpenApiResponse(description="Registration not found."),
         },
@@ -178,7 +275,22 @@ class CancelRegistrationView(APIView):
             user=request.user,
         ) # Retrieves the registration with the given primary key (pk) for the authenticated user or returns a 404 error if not found
 
-        registration = cancel_registration(registration=registration)
+        serializer = RegistrationCancelSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
 
-        serializer = RegistrationSerializer(registration)
-        return Response(serializer.data)
+        if not serializer.validated_data["confirm"]:
+            return Response(
+                {
+                    "detail": "Cancelling releases your spot. It will not be reserved for you.",
+                    "code": "confirmation_required",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        registration, promoted_registration = cancel_registration(registration=registration)
+
+        response_data = RegistrationSerializer(registration).data
+        if promoted_registration:
+            response_data["promoted_registration"] = RegistrationSerializer(promoted_registration).data
+
+        return Response(response_data)

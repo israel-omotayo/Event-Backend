@@ -36,7 +36,7 @@ JWT configuration:
 
 | Setting | Value |
 | --- | --- |
-| Access token lifetime | 5 minutes |
+| Access token lifetime | 60 minutes |
 | Refresh token lifetime | 1 day |
 | Refresh token rotation | Enabled |
 | Refresh token blacklist after rotation | Enabled |
@@ -71,8 +71,10 @@ Accept: application/json
 
 | Method | Endpoint | Auth | Description |
 | --- | --- | --- | --- |
-| `POST` | `/auth/register/` | No | Create a user and return JWT access/refresh tokens |
-| `POST` | `/auth/token/` | No | Login with username/password and return JWT access/refresh tokens |
+| `POST` | `/auth/register/` | No | Create an inactive user and send a verification code |
+| `POST` | `/auth/verify/` | No | Verify email and activate the user |
+| `POST` | `/auth/verification/resend/` | No | Resend verification code for an inactive user |
+| `POST` | `/auth/token/` | No | Login with email/password and return JWT access/refresh tokens |
 | `POST` | `/auth/token/refresh/` | No | Refresh an access token |
 | `GET` | `/events/` | No | List events with pagination, search, and date filters |
 | `POST` | `/events/` | Organizer | Create an event |
@@ -81,8 +83,11 @@ Accept: application/json
 | `PATCH` | `/events/<id>/` | Organizer owner | Update one of the authenticated organizer's events |
 | `DELETE` | `/events/<id>/` | Organizer owner | Delete one of the authenticated organizer's events |
 | `POST` | `/events/<id>/register/` | Yes | Register the authenticated user for an event |
+| `POST` | `/events/<id>/waitlist/` | Yes | Join the waitlist for a full event |
 | `GET` | `/my-registrations/` | Yes | View active registrations for the authenticated user |
+| `GET` | `/my-waitlist/` | Yes | View active waitlist entries for the authenticated user |
 | `POST` | `/registrations/<id>/cancel/` | Yes | Cancel one of the authenticated user's registrations |
+| `POST` | `/waitlist/<id>/cancel/` | Yes | Cancel one of the authenticated user's waitlist entries |
 
 ## Admin And Documentation Endpoints
 
@@ -96,7 +101,7 @@ For Postman or API clients, use `/auth/token/` and the `Authorization: Bearer ..
 
 ## Example Flow
 
-Create an account:
+Create an account. This creates the user as inactive and sends an email verification code:
 
 ```http
 POST /auth/register/
@@ -107,7 +112,7 @@ Content-Type: application/json
 {
   "username": "john",
   "email": "john@example.com",
-  "password": "password123"
+  "password": "StrongPass123!"
 }
 ```
 
@@ -118,12 +123,54 @@ Example response:
   "id": 1,
   "username": "john",
   "email": "john@example.com",
-  "access": "your_access_token_here",
-  "refresh": "your_refresh_token_here"
+  "detail": "Verification code sent to your email."
 }
 ```
 
-Login later:
+Verify the account:
+
+```http
+POST /auth/verify/
+Content-Type: application/json
+```
+
+```json
+{
+  "email": "john@example.com",
+  "code": "123456"
+}
+```
+
+Example response:
+
+```json
+{
+  "detail": "Account verified. You can now log in."
+}
+```
+
+Resend a verification code:
+
+```http
+POST /auth/verification/resend/
+Content-Type: application/json
+```
+
+```json
+{
+  "email": "john@example.com"
+}
+```
+
+Example response:
+
+```json
+{
+  "detail": "If an unverified account exists, a new code has been sent."
+}
+```
+
+Login after verification:
 
 ```http
 POST /auth/token/
@@ -132,8 +179,8 @@ Content-Type: application/json
 
 ```json
 {
-  "username": "john",
-  "password": "password123"
+  "email": "john@example.com",
+  "password": "StrongPass123!"
 }
 ```
 
@@ -191,7 +238,8 @@ Example response:
       "date_time": "2026-08-13T10:00:00Z",
       "capacity": 50,
       "created_at": "2026-08-06T10:00:00Z",
-      "spots_left": 50
+      "spots_left": 50,
+      "is_full": false
     }
   ]
 }
@@ -268,6 +316,33 @@ Accept: application/json
 
 No request body is required.
 
+If the event is full, the response is:
+
+```json
+{
+  "detail": "Event is full. Join the waitlist instead.",
+  "code": "event_full"
+}
+```
+
+Join the waitlist for a full event:
+
+```http
+POST /events/1/waitlist/
+Authorization: Bearer your_access_token_here
+Accept: application/json
+```
+
+No request body is required.
+
+View your active waitlist entries:
+
+```http
+GET /my-waitlist/
+Authorization: Bearer your_access_token_here
+Accept: application/json
+```
+
 View your active registrations:
 
 ```http
@@ -280,6 +355,29 @@ Cancel a registration:
 
 ```http
 POST /registrations/1/cancel/
+Authorization: Bearer your_access_token_here
+Content-Type: application/json
+```
+
+```json
+{
+  "confirm": true
+}
+```
+
+If `confirm` is missing or false, the API warns that the spot will not be reserved:
+
+```json
+{
+  "detail": "Cancelling releases your spot. It will not be reserved for you.",
+  "code": "confirmation_required"
+}
+```
+
+Cancel a waitlist entry:
+
+```http
+POST /waitlist/1/cancel/
 Authorization: Bearer your_access_token_here
 Accept: application/json
 ```

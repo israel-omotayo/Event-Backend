@@ -1,6 +1,5 @@
 import json
 import logging
-import threading
 from urllib import request
 
 from django.conf import settings
@@ -77,27 +76,6 @@ def send_email(*, to_email, subject, text_content, html_content=""):
     logger.info("Email sent to %s (subject=%s)", to_email, subject)
 
 
-def send_email_async(*, to_email, subject, text_content, html_content="", context=""):
-    def _send():
-        try:
-            send_email(
-                to_email=to_email,
-                subject=subject,
-                text_content=text_content,
-                html_content=html_content,
-            )
-        except Exception as exc:
-            logger.error(
-                "Async email delivery failed to %s (context=%s): %s",
-                to_email,
-                context,
-                exc,
-            )
-
-    thread = threading.Thread(target=_send, daemon=True, name=f"email-{context}")
-    thread.start()
-
-
 def send_verification_code_email(*, email, code):
     subject, text_content, html_content = build_verification_code_email(code=code)
     send_email(
@@ -105,17 +83,6 @@ def send_verification_code_email(*, email, code):
         subject=subject,
         text_content=text_content,
         html_content=html_content,
-    )
-
-
-def send_verification_code_email_async(*, email, code):
-    subject, text_content, html_content = build_verification_code_email(code=code)
-    send_email_async(
-        to_email=email,
-        subject=subject,
-        text_content=text_content,
-        html_content=html_content,
-        context="email_verification",
     )
 
 

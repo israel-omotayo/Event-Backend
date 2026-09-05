@@ -8,8 +8,8 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
 
-from .email import send_verification_code_email_async
 from .models import Profile
+from .tasks import send_verification_code_email_task
 
 
 User = get_user_model()
@@ -113,8 +113,8 @@ def register_user_with_verification(
     code = generate_verification_code()
     save_verification_code(user=user, code=code)
     transaction.on_commit(
-        lambda: send_verification_code_email_async(email=user.email, code=code)
-    ) # Send the verification code email after the transaction is committed 
+        lambda: send_verification_code_email_task(email=user.email, code=code)
+    )
     return user
 
 
@@ -223,6 +223,6 @@ def resend_verification_code(*, email):
     code = generate_verification_code()
     save_verification_code(user=user, code=code, increment_resend=True)
     transaction.on_commit(
-        lambda: send_verification_code_email_async(email=user.email, code=code)
+        lambda: send_verification_code_email_task(email=user.email, code=code)
     )
     return True

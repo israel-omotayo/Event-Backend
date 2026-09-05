@@ -19,7 +19,7 @@ class AccountAuthFlowTests(APITestCase):
     def test_registration_creates_inactive_user_and_sends_verification_code(self):
         with (
             patch("accounts.services.generate_verification_code", return_value="123456"),
-            patch("accounts.services.send_verification_code_email_async") as send_email_async,
+            patch("accounts.services.send_verification_code_email_task") as send_email_task,
         ):
             with self.captureOnCommitCallbacks(execute=True):
                 response = self.client.post(
@@ -52,7 +52,7 @@ class AccountAuthFlowTests(APITestCase):
             hash_verification_code("123456"),
         )
         self.assertIsNotNone(user.profile.email_verification_sent_at)
-        send_email_async.assert_called_once_with(email="new@example.com", code="123456")
+        send_email_task.assert_called_once_with(email="new@example.com", code="123456")
 
     def test_registration_rejects_duplicate_email_case_insensitively(self):
         User.objects.create_user(
@@ -154,7 +154,7 @@ class AccountAuthFlowTests(APITestCase):
 
         with (
             patch("accounts.services.generate_verification_code", return_value="222222"),
-            patch("accounts.services.send_verification_code_email_async") as send_email_async,
+            patch("accounts.services.send_verification_code_email_task") as send_email_task,
         ):
             with self.captureOnCommitCallbacks(execute=True):
                 response = self.client.post(
@@ -182,7 +182,7 @@ class AccountAuthFlowTests(APITestCase):
             user.profile.email_verification_code_hash,
             hash_verification_code("222222"),
         )
-        send_email_async.assert_called_once_with(email="stale@example.com", code="222222")
+        send_email_task.assert_called_once_with(email="stale@example.com", code="222222")
 
     def test_email_verification_activates_user_and_clears_code(self):
         with patch("accounts.services.generate_verification_code", return_value="123456"):
@@ -277,7 +277,7 @@ class AccountAuthFlowTests(APITestCase):
 
         with (
             patch("accounts.services.generate_verification_code", return_value="222222"),
-            patch("accounts.services.send_verification_code_email_async") as send_email_async,
+            patch("accounts.services.send_verification_code_email_task") as send_email_task,
         ):
             with self.captureOnCommitCallbacks(execute=True):
                 response = self.client.post(
@@ -296,7 +296,7 @@ class AccountAuthFlowTests(APITestCase):
         )
         self.assertEqual(user.profile.email_verification_resend_count, 1)
         self.assertIsNotNone(user.profile.email_verification_cooldown_until)
-        send_email_async.assert_called_once_with(email="resend@example.com", code="222222")
+        send_email_task.assert_called_once_with(email="resend@example.com", code="222222")
 
     def test_resend_verification_code_returns_generic_response_for_unknown_email(self):
         response = self.client.post(
