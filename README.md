@@ -8,6 +8,7 @@ This project is a reusable API/backend template for event registration, built wi
 
 - Event listing, event detail, pagination, search, and date filtering
 - Email verification before JWT login
+- Password change, logout, and password reset endpoints
 - Attendee and organizer roles
 - Organizer-only event creation and owner-only event updates/deletes
 - Authenticated event registration
@@ -112,10 +113,6 @@ HUEY_NAME=event-api
 HUEY_IMMEDIATE=True
 HUEY_WORKERS=1
 HUEY_WORKER_TYPE=thread
-LOG_LEVEL=INFO
-DJANGO_LOG_LEVEL=INFO
-HUEY_LOG_LEVEL=INFO
-APP_LOG_LEVEL=INFO
 SENTRY_DSN=your-sentry-dsn
 SENTRY_ENVIRONMENT=production
 SENTRY_TRACES_SAMPLE_RATE=0
@@ -174,6 +171,10 @@ Detailed endpoint examples are in `API_DOCS.md`.
 | `POST` | `/auth/verification/resend/` | Resend verification code for an inactive user |
 | `POST` | `/auth/token/` | Login with email/password and return JWT access/refresh tokens |
 | `POST` | `/auth/token/refresh/` | Refresh a JWT access token |
+| `POST` | `/auth/logout/` | Logout by blacklisting a refresh token |
+| `POST` | `/auth/password/change/` | Change password for the authenticated user |
+| `POST` | `/auth/password/reset/request/` | Request a password reset token by email |
+| `POST` | `/auth/password/reset/confirm/` | Confirm password reset with uid/token |
 | `GET` | `/events/` | List paginated events with optional search/date filters |
 | `POST` | `/events/` | Create an event as an organizer |
 | `GET` | `/events/<id>/` | View event details |
@@ -195,6 +196,27 @@ Authorization: Bearer your_access_token_here
 ```
 
 JWT access tokens last 60 minutes. Refresh tokens last 1 day, rotate on refresh, and old refresh tokens are blacklisted after rotation.
+
+Password change requires the current password and refresh token:
+
+```json
+{
+  "old_password": "OldPass123!",
+  "new_password": "NewStrongPass123!",
+  "confirm_new_password": "NewStrongPass123!",
+  "refresh": "your_refresh_token_here"
+}
+```
+
+Logout requires the refresh token:
+
+```json
+{
+  "refresh": "your_refresh_token_here"
+}
+```
+
+Password reset uses Django's built-in reset token generator. Request reset with an email, then confirm with the emailed `uid` and `token`.
 
 Event list examples:
 
@@ -268,10 +290,6 @@ On Render Free, Sentry events come from the web service. If you later add a paid
 Useful logging env vars:
 
 ```env
-LOG_LEVEL=INFO
-DJANGO_LOG_LEVEL=INFO
-HUEY_LOG_LEVEL=INFO
-APP_LOG_LEVEL=INFO
 SENTRY_DSN=your-sentry-dsn
 SENTRY_ENVIRONMENT=production
 SENTRY_TRACES_SAMPLE_RATE=0

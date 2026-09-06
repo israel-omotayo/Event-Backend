@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+from django.contrib.auth.tokens import default_token_generator
 from django.contrib.auth import get_user_model
 from django.test import override_settings
 from django.urls import reverse
@@ -8,7 +9,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from .models import Profile
-from .services import get_resend_cooldown, hash_verification_code
+from .services import encode_user_id, get_resend_cooldown, hash_verification_code
 
 
 User = get_user_model()
@@ -403,3 +404,253 @@ class AccountAuthFlowTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("detail", response.data)
         self.assertNotIn("access", response.data)
+
+    def test_logout_blacklists_refresh_token(self):
+        User.objects.create_user(
+            username="logoutuser",
+            email="logout@example.com",
+            password="StrongPass123!",
+            is_active=True,
+        )
+        login_response = self.client.post(
+            reverse("auth-token"),
+            {"email": "logout@example.com", "password": "StrongPass123!"},
+            format="json",
+        )
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}"
+        )
+
+        logout_response = self.client.post(
+            reverse("auth-logout"),
+            {"refresh": login_response.data["refresh"]},
+            format="json",
+        )
+        refresh_response = self.client.post(
+            reverse("auth-token-refresh"),
+            {"refresh": login_response.data["refresh"]},
+            format="json",
+        )
+
+        self.assertEqual(logout_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(logout_response.data["detail"], "Logged out successfully.")
+        self.assertEqual(refresh_response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_password_change_updates_password_and_blacklists_refresh_token(self):
+        User.objects.create_user(
+            username="changeuser",
+            email="change@example.com",
+            password="OldStrongPass123!",
+            is_active=True,
+        )
+        login_response = self.client.post(
+            reverse("auth-token"),
+            {"email": "change@example.com", "password": "OldStrongPass123!"},
+            format="json",
+        )
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}"
+        )
+
+        change_response = self.client.post(
+            reverse("auth-password-change"),
+            {
+                "old_password": "OldStrongPass123!",
+                "new_password": "NewStrongPass123!",
+                "confirm_new_password": "NewStrongPass123!",
+                "refresh": login_response.data["refresh"],
+            },
+            format="json",
+        )
+        old_login_response = self.client.post(
+            reverse("auth-token"),
+            {"email": "change@example.com", "password": "OldStrongPass123!"},
+            format="json",
+        )
+        new_login_response = self.client.post(
+            reverse("auth-token"),
+            {"email": "change@example.com", "password": "NewStrongPass123!"},
+            format="json",
+        )
+        refresh_response = self.client.post(
+            reverse("auth-token-refresh"),
+            {"refresh": login_response.data["refresh"]},
+            format="json",
+        )
+
+        self.assertEqual(change_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(change_response.data["detail"], "Password changed successfully.")
+        self.assertEqual(old_login_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(new_login_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(refresh_response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_password_change_rejects_wrong_old_password(self):
+        user = User.objects.create_user(
+            username="wrongold",
+            email="wrongold@example.com",
+            password="OldStrongPass123!",
+            is_active=True,
+        )
+        login_response = self.client.post(
+            reverse("auth-token"),
+            {"email": "wrongold@example.com", "password": "OldStrongPass123!"},
+            format="json",
+        )
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}"
+        )
+
+        response = self.client.post(
+            reverse("auth-password-change"),
+            {
+                "old_password": "WrongOldPass123!",
+                "new_password": "NewStrongPass123!",
+                "confirm_new_password": "NewStrongPass123!",
+                "refresh": login_response.data["refresh"],
+            },
+            format="json",
+        )
+
+        user.refresh_from_db()
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(user.check_password("OldStrongPass123!"))
+
+    def test_password_change_rejects_mismatched_new_passwords(self):
+        User.objects.create_user(
+            username="mismatch",
+            email="mismatch@example.com",
+            password="OldStrongPass123!",
+            is_active=True,
+        )
+        login_response = self.client.post(
+            reverse("auth-token"),
+            {"email": "mismatch@example.com", "password": "OldStrongPass123!"},
+            format="json",
+        )
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}"
+        )
+
+        response = self.client.post(
+            reverse("auth-password-change"),
+            {
+                "old_password": "OldStrongPass123!",
+                "new_password": "NewStrongPass123!",
+                "confirm_new_password": "DifferentStrongPass123!",
+                "refresh": login_response.data["refresh"],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("confirm_new_password", response.data)
+
+    def test_password_reset_request_sends_generic_response_and_email_task(self):
+        user = User.objects.create_user(
+            username="resetuser",
+            email="Reset@Example.com",
+            password="OldStrongPass123!",
+            is_active=True,
+        )
+
+        with patch("accounts.services.send_password_reset_email_task") as send_email_task:
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(
+                    reverse("auth-password-reset-request"),
+                    {"email": "  reset@example.com  "},
+                    format="json",
+                )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["detail"],
+            "If an account exists for this email, a password reset email has been sent.",
+        )
+        send_email_task.assert_called_once()
+        self.assertEqual(send_email_task.call_args.kwargs["email"], user.email)
+        self.assertEqual(send_email_task.call_args.kwargs["uid"], encode_user_id(user))
+
+    def test_password_reset_request_is_generic_for_unknown_email(self):
+        with patch("accounts.services.send_password_reset_email_task") as send_email_task:
+            response = self.client.post(
+                reverse("auth-password-reset-request"),
+                {"email": "missing@example.com"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["detail"],
+            "If an account exists for this email, a password reset email has been sent.",
+        )
+        send_email_task.assert_not_called()
+
+    def test_password_reset_confirm_updates_password_and_blacklists_refresh_tokens(self):
+        user = User.objects.create_user(
+            username="confirmreset",
+            email="confirm-reset@example.com",
+            password="OldStrongPass123!",
+            is_active=True,
+        )
+        login_response = self.client.post(
+            reverse("auth-token"),
+            {"email": "confirm-reset@example.com", "password": "OldStrongPass123!"},
+            format="json",
+        )
+        uid = encode_user_id(user)
+        token = default_token_generator.make_token(user)
+
+        response = self.client.post(
+            reverse("auth-password-reset-confirm"),
+            {
+                "uid": uid,
+                "token": token,
+                "new_password": "NewStrongPass123!",
+                "confirm_new_password": "NewStrongPass123!",
+            },
+            format="json",
+        )
+        old_login_response = self.client.post(
+            reverse("auth-token"),
+            {"email": "confirm-reset@example.com", "password": "OldStrongPass123!"},
+            format="json",
+        )
+        new_login_response = self.client.post(
+            reverse("auth-token"),
+            {"email": "confirm-reset@example.com", "password": "NewStrongPass123!"},
+            format="json",
+        )
+        refresh_response = self.client.post(
+            reverse("auth-token-refresh"),
+            {"refresh": login_response.data["refresh"]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["detail"], "Password reset successfully.")
+        self.assertEqual(old_login_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(new_login_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(refresh_response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_password_reset_confirm_rejects_invalid_token(self):
+        user = User.objects.create_user(
+            username="badtoken",
+            email="badtoken@example.com",
+            password="OldStrongPass123!",
+            is_active=True,
+        )
+
+        response = self.client.post(
+            reverse("auth-password-reset-confirm"),
+            {
+                "uid": encode_user_id(user),
+                "token": "bad-token",
+                "new_password": "NewStrongPass123!",
+                "confirm_new_password": "NewStrongPass123!",
+            },
+            format="json",
+        )
+
+        user.refresh_from_db()
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(user.check_password("OldStrongPass123!"))

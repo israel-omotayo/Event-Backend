@@ -1,5 +1,4 @@
 from django.urls import path
-from rest_framework_simplejwt.views import TokenRefreshView
 
 from .views import (
     CancelWaitlistEntryView,
@@ -14,7 +13,6 @@ from .views import (
 
 
 urlpatterns = [
-    path("auth/token/refresh/", TokenRefreshView.as_view(), name="auth-token-refresh"),
     path("events/", EventListView.as_view(), name="event-list"),
     path("events/<int:pk>/", EventDetailView.as_view(), name="event-detail"),
     path("events/<int:pk>/register/", EventRegisterView.as_view(), name="event-register"),

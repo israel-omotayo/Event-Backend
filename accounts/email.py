@@ -86,6 +86,19 @@ def send_verification_code_email(*, email, code):
     )
 
 
+def send_password_reset_email(*, email, uid, token):
+    subject, text_content, html_content = build_password_reset_email(
+        uid=uid,
+        token=token,
+    )
+    send_email(
+        to_email=email,
+        subject=subject,
+        text_content=text_content,
+        html_content=html_content,
+    )
+
+
 def build_verification_code_email(*, code):
     subject = "Verify your Event Registration account"
     text_content = f"Your verification code is {code}. It expires in 10 minutes."
@@ -93,5 +106,22 @@ def build_verification_code_email(*, code):
         "<p>Your verification code is:</p>"
         f"<p><strong>{code}</strong></p>"
         "<p>This code expires in 10 minutes.</p>"
+    )
+    return subject, text_content, html_content
+
+
+def build_password_reset_email(*, uid, token):
+    subject = "Reset your Event Registration password"
+    text_content = (
+        "Use this password reset token to set a new password.\n\n"
+        f"uid: {uid}\n"
+        f"token: {token}\n\n"
+        "If you did not request a password reset, you can ignore this email."
+    )
+    html_content = (
+        "<p>Use this password reset token to set a new password.</p>"
+        f"<p><strong>uid:</strong> {uid}</p>"
+        f"<p><strong>token:</strong> {token}</p>"
+        "<p>If you did not request a password reset, you can ignore this email.</p>"
     )
     return subject, text_content, html_content

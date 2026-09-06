@@ -76,6 +76,10 @@ Accept: application/json
 | `POST` | `/auth/verification/resend/` | No | Resend verification code for an inactive user |
 | `POST` | `/auth/token/` | No | Login with email/password and return JWT access/refresh tokens |
 | `POST` | `/auth/token/refresh/` | No | Refresh an access token |
+| `POST` | `/auth/logout/` | Yes | Logout by blacklisting a refresh token |
+| `POST` | `/auth/password/change/` | Yes | Change the authenticated user's password |
+| `POST` | `/auth/password/reset/request/` | No | Request a password reset token by email |
+| `POST` | `/auth/password/reset/confirm/` | No | Confirm password reset with uid/token |
 | `GET` | `/events/` | No | List events with pagination, search, and date filters |
 | `POST` | `/events/` | Organizer | Create an event |
 | `GET` | `/events/<id>/` | No | View one event |
@@ -212,6 +216,74 @@ Example response:
 {
   "access": "new_access_token_here",
   "refresh": "new_refresh_token_here"
+}
+```
+
+Logout:
+
+```http
+POST /auth/logout/
+Authorization: Bearer your_access_token_here
+Content-Type: application/json
+```
+
+```json
+{
+  "refresh": "your_refresh_token_here"
+}
+```
+
+Change password:
+
+```http
+POST /auth/password/change/
+Authorization: Bearer your_access_token_here
+Content-Type: application/json
+```
+
+```json
+{
+  "old_password": "OldPass123!",
+  "new_password": "NewStrongPass123!",
+  "confirm_new_password": "NewStrongPass123!",
+  "refresh": "your_refresh_token_here"
+}
+```
+
+Request password reset:
+
+```http
+POST /auth/password/reset/request/
+Content-Type: application/json
+```
+
+```json
+{
+  "email": "john@example.com"
+}
+```
+
+Example response:
+
+```json
+{
+  "detail": "If an account exists for this email, a password reset email has been sent."
+}
+```
+
+Confirm password reset:
+
+```http
+POST /auth/password/reset/confirm/
+Content-Type: application/json
+```
+
+```json
+{
+  "uid": "MQ",
+  "token": "django-reset-token",
+  "new_password": "NewStrongPass123!",
+  "confirm_new_password": "NewStrongPass123!"
 }
 ```
 

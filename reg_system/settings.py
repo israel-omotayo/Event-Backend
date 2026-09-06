@@ -258,10 +258,15 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+
+    "DEFAULT_THROTTLE_RATES": {
+        "auth_login": os.environ.get("AUTH_LOGIN_THROTTLE_RATE", "10/minute"),
+        "password_reset": os.environ.get("PASSWORD_RESET_THROTTLE_RATE", "5/hour"),
+    },
 }
 
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60), # change back to 5 minutes for production
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60), # Change back to 5 minutes for production
     "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,

@@ -4,12 +4,19 @@ import secrets
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.auth.tokens import default_token_generator
 from django.db import transaction
+from django.utils.encoding import force_str
+from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
+from django.utils.encoding import force_bytes
 from django.utils import timezone
 from rest_framework import serializers
+from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import Profile
-from .tasks import send_verification_code_email_task
+from .tasks import send_password_reset_email_task, send_verification_code_email_task
 
 
 User = get_user_model()
@@ -29,6 +36,44 @@ def hash_verification_code(code):
 
 def code_matches(*, code, code_hash):
     return hmac.compare_digest(hash_verification_code(code), code_hash)
+
+
+def encode_user_id(user):
+    return urlsafe_base64_encode(force_bytes(user.pk))
+
+
+def decode_user_id(uid):
+    try:
+        user_id = force_str(urlsafe_base64_decode(uid)) # Decode the base64-encoded user ID and convert it to a string
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+    return User.objects.filter(pk=user_id).first()
+
+
+def blacklist_refresh_token(refresh):
+    try:
+        token = RefreshToken(refresh)
+        token.blacklist()
+    except TokenError:
+        raise serializers.ValidationError({"refresh": "Invalid or expired refresh token."})
+
+
+def validate_refresh_token_for_user(*, refresh, user):
+    try:
+        token = RefreshToken(refresh)
+    except TokenError:
+        raise serializers.ValidationError({"refresh": "Invalid or expired refresh token."})
+
+    if str(token.get("user_id")) != str(user.pk):
+        raise serializers.ValidationError({"refresh": "Refresh token does not belong to this user."})
+
+    return token
+
+
+def blacklist_user_refresh_tokens(user): # Blacklist all refresh tokens for a given user
+    for outstanding_token in OutstandingToken.objects.filter(user=user):
+        BlacklistedToken.objects.get_or_create(token=outstanding_token)
 
 
 def get_resend_cooldown(resend_count):
@@ -200,6 +245,59 @@ def verify_email_code(*, email, code):
         raise validation_error
 
     return user
+
+
+@transaction.atomic
+def change_user_password(*, user, old_password, new_password, refresh):
+    locked_user = User.objects.select_for_update().get(pk=user.pk)
+    validate_refresh_token_for_user(refresh=refresh, user=locked_user)
+
+    if not locked_user.check_password(old_password):
+        raise serializers.ValidationError({"old_password": "Old password is incorrect."})
+
+    locked_user.set_password(new_password)
+    locked_user.save(update_fields=["password"])
+    blacklist_user_refresh_tokens(locked_user)
+    return locked_user
+
+
+@transaction.atomic
+def request_password_reset(*, email):
+    user = (
+        User.objects.select_for_update()
+        .filter(email__iexact=normalize_email(email), is_active=True)
+        .first()
+    )
+
+    if not user:
+        return False
+
+    uid = encode_user_id(user)
+    token = default_token_generator.make_token(user)
+    transaction.on_commit(
+        lambda: send_password_reset_email_task(
+            email=user.email,
+            uid=uid,
+            token=token,
+        )
+    )
+    return True
+
+
+@transaction.atomic
+def confirm_password_reset(*, uid, token, new_password):
+    user = decode_user_id(uid)
+    if not user or not user.is_active:
+        raise serializers.ValidationError({"detail": "Invalid password reset token."})
+
+    locked_user = User.objects.select_for_update().get(pk=user.pk)
+    if not default_token_generator.check_token(locked_user, token):
+        raise serializers.ValidationError({"detail": "Invalid password reset token."})
+
+    locked_user.set_password(new_password)
+    locked_user.save(update_fields=["password"])
+    blacklist_user_refresh_tokens(locked_user)
+    return locked_user
 
 
 @transaction.atomic
