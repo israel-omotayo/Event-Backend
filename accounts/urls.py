@@ -3,6 +3,7 @@ from django.urls import path
 from .views import (
     EmailVerificationView,
     EmailTokenObtainPairView,
+    GoogleAuthView,
     LogoutView,
     PasswordChangeView,
     PasswordResetConfirmView,
@@ -18,6 +19,7 @@ urlpatterns = [
     path("auth/verify/", EmailVerificationView.as_view(), name="auth-verify"),
     path("auth/verification/resend/", ResendVerificationCodeView.as_view(), name="auth-verification-resend"),
     path("auth/token/", EmailTokenObtainPairView.as_view(), name="auth-token"),
+    path("auth/google/", GoogleAuthView.as_view(), name="auth-google"),
     path("auth/token/refresh/", TokenRefreshView.as_view(), name="auth-token-refresh"),
     path("auth/logout/", LogoutView.as_view(), name="auth-logout"),
     path("auth/password/change/", PasswordChangeView.as_view(), name="auth-password-change"),

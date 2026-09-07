@@ -6,10 +6,13 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
 from django.db import transaction
+from django.utils import timezone
+from django.utils.encoding import force_bytes
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
-from django.utils.encoding import force_bytes
-from django.utils import timezone
+from google.auth.exceptions import GoogleAuthError
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token as google_id_token
 from rest_framework import serializers
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
@@ -74,6 +77,123 @@ def validate_refresh_token_for_user(*, refresh, user):
 def blacklist_user_refresh_tokens(user): # Blacklist all refresh tokens for a given user
     for outstanding_token in OutstandingToken.objects.filter(user=user):
         BlacklistedToken.objects.get_or_create(token=outstanding_token)
+
+
+def generate_unique_username_from_email(email):
+    base_username = email.split("@", 1)[0].strip() or "user"
+    base_username = "".join(
+        char if char.isalnum() or char in "._-" else "_" # Replace invalid characters with underscores
+        for char in base_username
+    )[:120]
+    username = base_username
+    counter = 1
+
+    while User.objects.filter(username__iexact=username).exists():
+        suffix = f"_{counter}"
+        username = f"{base_username[:150 - len(suffix)]}{suffix}"
+        counter += 1
+
+    return username
+
+
+def verify_google_id_token(id_token):
+    client_id = getattr(settings, "GOOGLE_OAUTH_CLIENT_ID", "")
+    if not client_id:
+        raise serializers.ValidationError({"detail": "Google auth is not configured."})
+
+    try:
+        return google_id_token.verify_oauth2_token(
+            id_token,
+            google_requests.Request(),
+            client_id,
+        )
+    except (ValueError, GoogleAuthError):
+        raise serializers.ValidationError({"detail": "Invalid Google token."})
+
+
+@transaction.atomic
+def authenticate_with_google(*, id_token):
+    id_info = verify_google_id_token(id_token)
+    google_sub = id_info.get("sub")
+    email = normalize_email(id_info.get("email", ""))
+    email_verified = id_info.get("email_verified")
+
+    if not google_sub or not email:
+        raise serializers.ValidationError({"detail": "Invalid Google token."})
+
+    if email_verified is not True:
+        raise serializers.ValidationError({"detail": "Google email is not verified."})
+
+    profile = (
+        Profile.objects.select_for_update()
+        .select_related("user")
+        .filter(google_sub=google_sub)
+        .first()
+    )
+    if profile:
+        if normalize_email(profile.user.email) != email:
+            raise serializers.ValidationError({"detail": "Google account is linked to another email."})
+
+        user = profile.user
+        if not user.is_active:
+            user.is_active = True
+            user.save(update_fields=["is_active"])
+        return user
+
+    user = User.objects.select_for_update().filter(email__iexact=email).first()
+    if user:
+        profile = user.profile
+        if profile.google_sub and profile.google_sub != google_sub:
+            raise serializers.ValidationError({"detail": "This email is linked to another Google account."})
+    else:
+        user = User.objects.create_user(
+            username=generate_unique_username_from_email(email),
+            email=email,
+            first_name=(id_info.get("given_name") or "").strip(),
+            last_name=(id_info.get("family_name") or "").strip(),
+            password=None,
+            is_active=True,
+        )
+        profile = user.profile
+
+    fields_to_update = []
+    if normalize_email(user.email) != email:
+        user.email = email
+        fields_to_update.append("email")
+
+    first_name = (id_info.get("given_name") or "").strip()
+    last_name = (id_info.get("family_name") or "").strip()
+    
+    if first_name and not user.first_name:
+        user.first_name = first_name
+        fields_to_update.append("first_name")
+    if last_name and not user.last_name:
+        user.last_name = last_name
+        fields_to_update.append("last_name")
+    if not user.is_active:
+        user.is_active = True
+        fields_to_update.append("is_active")
+    if fields_to_update:
+        user.save(update_fields=fields_to_update)
+
+    profile.google_sub = google_sub
+    profile.email_verification_code_hash = None
+    profile.email_verification_sent_at = None
+    profile.email_verification_attempts = 0
+    profile.email_verification_resend_count = 0
+    profile.email_verification_cooldown_until = None
+    profile.save(
+        update_fields=[
+            "google_sub",
+            "email_verification_code_hash",
+            "email_verification_sent_at",
+            "email_verification_attempts",
+            "email_verification_resend_count",
+            "email_verification_cooldown_until",
+            "updated_at",
+        ]
+    )
+    return user
 
 
 def get_resend_cooldown(resend_count):

@@ -75,6 +75,7 @@ Accept: application/json
 | `POST` | `/auth/verify/` | No | Verify email and activate the user |
 | `POST` | `/auth/verification/resend/` | No | Resend verification code for an inactive user |
 | `POST` | `/auth/token/` | No | Login with email/password and return JWT access/refresh tokens |
+| `POST` | `/auth/google/` | No | Login/register with a verified Google ID token and return JWT tokens |
 | `POST` | `/auth/token/refresh/` | No | Refresh an access token |
 | `POST` | `/auth/logout/` | Yes | Logout by blacklisting a refresh token |
 | `POST` | `/auth/password/change/` | Yes | Change the authenticated user's password |
@@ -196,6 +197,37 @@ Example response:
   "refresh": "your_refresh_token_here"
 }
 ```
+
+Login or register with Google:
+
+```http
+POST /auth/google/
+Content-Type: application/json
+```
+
+```json
+{
+  "id_token": "google_id_token_from_frontend"
+}
+```
+
+Example response:
+
+```json
+{
+  "access": "your_access_token_here",
+  "refresh": "your_refresh_token_here",
+  "user": {
+    "id": 1,
+    "username": "john",
+    "first_name": "John",
+    "last_name": "Doe",
+    "email": "john@example.com"
+  }
+}
+```
+
+The backend verifies the ID token with Google's official Python auth library, checks the token audience against `GOOGLE_OAUTH_CLIENT_ID`, requires `email_verified=true`, stores Google's stable `sub` on the local profile, and issues this API's normal JWT tokens.
 
 Refresh an access token:
 

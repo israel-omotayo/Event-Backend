@@ -9,6 +9,7 @@ This project is a reusable API/backend template for event registration, built wi
 - Event listing, event detail, pagination, search, and date filtering
 - Email verification before JWT login
 - Password change, logout, and password reset endpoints
+- Google ID-token auth that returns local JWT tokens
 - Attendee and organizer roles
 - Organizer-only event creation and owner-only event updates/deletes
 - Authenticated event registration
@@ -29,6 +30,7 @@ This project is a reusable API/backend template for event registration, built wi
 - Django REST Framework
 - PostgreSQL
 - JWT Authentication
+- Google ID token verification
 - Huey for background tasks
 - Sentry SDK for error monitoring
 - drf-spectacular for Swagger/OpenAPI docs
@@ -87,6 +89,7 @@ POSTGRES_PORT=5432
 DEFAULT_FROM_EMAIL=Event API <noreply@example.com>
 EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
 RESEND_API_KEY=
+GOOGLE_OAUTH_CLIENT_ID=
 HUEY_NAME=event-api
 HUEY_WORKERS=1
 HUEY_WORKER_TYPE=thread
@@ -109,6 +112,7 @@ POSTGRES_SSLMODE=require
 DEFAULT_FROM_EMAIL=Event API <noreply@yourdomain.com>
 EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
 RESEND_API_KEY=your-resend-api-key
+GOOGLE_OAUTH_CLIENT_ID=your-google-web-client-id.apps.googleusercontent.com
 HUEY_NAME=event-api
 HUEY_IMMEDIATE=True
 HUEY_WORKERS=1
@@ -170,6 +174,7 @@ Detailed endpoint examples are in `API_DOCS.md`.
 | `POST` | `/auth/verify/` | Verify email and activate the user |
 | `POST` | `/auth/verification/resend/` | Resend verification code for an inactive user |
 | `POST` | `/auth/token/` | Login with email/password and return JWT access/refresh tokens |
+| `POST` | `/auth/google/` | Login/register with a verified Google ID token and return JWT tokens |
 | `POST` | `/auth/token/refresh/` | Refresh a JWT access token |
 | `POST` | `/auth/logout/` | Logout by blacklisting a refresh token |
 | `POST` | `/auth/password/change/` | Change password for the authenticated user |
@@ -217,6 +222,16 @@ Logout requires the refresh token:
 ```
 
 Password reset uses Django's built-in reset token generator. Request reset with an email, then confirm with the emailed `uid` and `token`.
+
+Google auth expects an ID token from Google Identity Services:
+
+```json
+{
+  "id_token": "google_id_token_from_frontend"
+}
+```
+
+The backend verifies the token against `GOOGLE_OAUTH_CLIENT_ID`, requires Google's `email_verified` claim, creates or links the local user by email, stores Google's stable `sub` on the profile, and returns normal JWT `access` and `refresh` tokens.
 
 Event list examples:
 

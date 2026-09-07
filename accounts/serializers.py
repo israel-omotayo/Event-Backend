@@ -5,6 +5,7 @@ from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from .services import (
+    authenticate_with_google,
     decode_user_id,
     normalize_email,
     register_user_with_verification,
@@ -136,6 +137,14 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
 
 class LogoutSerializer(serializers.Serializer):
     refresh = serializers.CharField(write_only=True)
+
+
+class GoogleAuthSerializer(serializers.Serializer):
+    id_token = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        attrs["user"] = authenticate_with_google(id_token=attrs["id_token"])
+        return attrs
 
 
 class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):

@@ -18,6 +18,7 @@ class Profile(models.Model):
         choices=Role.choices,
         default=Role.ATTENDEE,
     )
+    google_sub = models.CharField(max_length=255, unique=True, null=True, blank=True)
     email_verification_code_hash = models.CharField(max_length=64, null=True, blank=True)
     email_verification_sent_at = models.DateTimeField(null=True, blank=True)
     email_verification_attempts = models.PositiveSmallIntegerField(default=0)

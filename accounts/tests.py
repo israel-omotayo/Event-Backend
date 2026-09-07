@@ -405,6 +405,166 @@ class AccountAuthFlowTests(APITestCase):
         self.assertIn("detail", response.data)
         self.assertNotIn("access", response.data)
 
+    def test_google_auth_creates_active_user_and_returns_jwt_tokens(self):
+        with patch(
+            "accounts.services.verify_google_id_token",
+            return_value={
+                "sub": "google-sub-1",
+                "email": "GoogleUser@Example.com",
+                "email_verified": True,
+                "given_name": "Google",
+                "family_name": "User",
+            },
+        ):
+            response = self.client.post(
+                reverse("auth-google"),
+                {"id_token": "valid-google-token"},
+                format="json",
+            )
+
+        user = User.objects.get(email="googleuser@example.com")
+        user.profile.refresh_from_db()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", response.data)
+        self.assertIn("refresh", response.data)
+        self.assertEqual(response.data["user"]["email"], "googleuser@example.com")
+        self.assertTrue(user.is_active)
+        self.assertEqual(user.first_name, "Google")
+        self.assertEqual(user.last_name, "User")
+        self.assertEqual(user.profile.google_sub, "google-sub-1")
+        self.assertFalse(user.has_usable_password())
+
+    def test_google_auth_links_existing_inactive_user_by_verified_email(self):
+        user = User.objects.create_user(
+            username="pendinggoogle",
+            email="pending-google@example.com",
+            password="OldStrongPass123!",
+            is_active=False,
+        )
+        user.profile.email_verification_code_hash = hash_verification_code("123456")
+        user.profile.email_verification_sent_at = timezone.now()
+        user.profile.email_verification_attempts = 2
+        user.profile.save(
+            update_fields=[
+                "email_verification_code_hash",
+                "email_verification_sent_at",
+                "email_verification_attempts",
+            ]
+        )
+
+        with patch(
+            "accounts.services.verify_google_id_token",
+            return_value={
+                "sub": "google-sub-2",
+                "email": "Pending-Google@Example.com",
+                "email_verified": True,
+                "given_name": "Pending",
+                "family_name": "Google",
+            },
+        ):
+            response = self.client.post(
+                reverse("auth-google"),
+                {"id_token": "valid-google-token"},
+                format="json",
+            )
+
+        user.refresh_from_db()
+        user.profile.refresh_from_db()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(user.is_active)
+        self.assertEqual(user.profile.google_sub, "google-sub-2")
+        self.assertIsNone(user.profile.email_verification_code_hash)
+        self.assertIsNone(user.profile.email_verification_sent_at)
+        self.assertEqual(user.profile.email_verification_attempts, 0)
+
+    def test_google_auth_reuses_existing_google_link(self):
+        user = User.objects.create_user(
+            username="linkedgoogle",
+            email="linked-google@example.com",
+            password="OldStrongPass123!",
+            is_active=True,
+        )
+        user.profile.google_sub = "google-sub-3"
+        user.profile.save(update_fields=["google_sub"])
+
+        with patch(
+            "accounts.services.verify_google_id_token",
+            return_value={
+                "sub": "google-sub-3",
+                "email": "Linked-Google@Example.com",
+                "email_verified": True,
+            },
+        ):
+            response = self.client.post(
+                reverse("auth-google"),
+                {"id_token": "valid-google-token"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["user"]["id"], user.id)
+        self.assertIn("access", response.data)
+        self.assertIn("refresh", response.data)
+
+    def test_google_auth_rejects_unverified_google_email(self):
+        with patch(
+            "accounts.services.verify_google_id_token",
+            return_value={
+                "sub": "google-sub-4",
+                "email": "unverified-google@example.com",
+                "email_verified": False,
+            },
+        ):
+            response = self.client.post(
+                reverse("auth-google"),
+                {"id_token": "valid-google-token"},
+                format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(str(response.data["detail"][0]), "Google email is not verified.")
+        self.assertFalse(User.objects.filter(email="unverified-google@example.com").exists())
+
+    def test_google_auth_rejects_google_sub_linked_to_different_email(self):
+        user = User.objects.create_user(
+            username="conflictgoogle",
+            email="conflict-google@example.com",
+            password="OldStrongPass123!",
+            is_active=True,
+        )
+        user.profile.google_sub = "google-sub-5"
+        user.profile.save(update_fields=["google_sub"])
+
+        with patch(
+            "accounts.services.verify_google_id_token",
+            return_value={
+                "sub": "google-sub-5",
+                "email": "different-google@example.com",
+                "email_verified": True,
+            },
+        ):
+            response = self.client.post(
+                reverse("auth-google"),
+                {"id_token": "valid-google-token"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(str(response.data["detail"][0]), "Google account is linked to another email.")
+
+    @override_settings(GOOGLE_OAUTH_CLIENT_ID="")
+    def test_google_auth_requires_google_client_id_configuration(self):
+        response = self.client.post(
+            reverse("auth-google"),
+            {"id_token": "valid-google-token"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(str(response.data["detail"][0]), "Google auth is not configured.")
+
     def test_logout_blacklists_refresh_token(self):
         User.objects.create_user(
             username="logoutuser",

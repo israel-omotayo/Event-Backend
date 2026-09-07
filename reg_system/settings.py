@@ -172,6 +172,7 @@ RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 EMAIL_VERIFICATION_CODE_LIFETIME = timedelta(minutes=10)
 EMAIL_VERIFICATION_RESEND_COOLDOWN = timedelta(minutes=1)
 EMAIL_VERIFICATION_MAX_RESEND_COOLDOWN = timedelta(days=1)
+GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
 
 HUEY_CONNECTION = {
     "dbname": DATABASES["default"]["NAME"],
@@ -261,6 +262,7 @@ REST_FRAMEWORK = {
 
     "DEFAULT_THROTTLE_RATES": {
         "auth_login": os.environ.get("AUTH_LOGIN_THROTTLE_RATE", "10/minute"),
+        "google_auth": os.environ.get("GOOGLE_AUTH_THROTTLE_RATE", "10/minute"),
         "password_reset": os.environ.get("PASSWORD_RESET_THROTTLE_RATE", "5/hour"),
     },
 }
