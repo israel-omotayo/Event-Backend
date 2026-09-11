@@ -120,6 +120,9 @@ DEFAULT_FROM_EMAIL=Event API <noreply@yourdomain.com>
 EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
 RESEND_API_KEY=your-resend-api-key
 GOOGLE_OAUTH_CLIENT_ID=your-google-web-client-id.apps.googleusercontent.com
+DJANGO_SUPERUSER_USERNAME=admin
+DJANGO_SUPERUSER_EMAIL=admin@example.com
+DJANGO_SUPERUSER_PASSWORD=strong-password
 SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
 SUPABASE_STORAGE_BUCKET=event-images
@@ -146,6 +149,23 @@ Create an admin user:
 ```powershell
 .\.venv\Scripts\python.exe manage.py createsuperuser
 ```
+
+For Render Free, use the deployment build script because pre-deploy commands are not available on the Free web service plan:
+
+```txt
+Build command: bash render-build.sh
+Start command: gunicorn reg_system.wsgi:application --workers 1 --threads 2 --timeout 120
+```
+
+`render-build.sh` installs dependencies, runs migrations, and creates or updates the superuser when these env vars are set:
+
+```env
+DJANGO_SUPERUSER_USERNAME=admin
+DJANGO_SUPERUSER_EMAIL=admin@example.com
+DJANGO_SUPERUSER_PASSWORD=strong-password
+```
+
+The superuser setup is idempotent, so rerunning deploys will update the same admin user instead of creating duplicates.
 
 Start the development server:
 
