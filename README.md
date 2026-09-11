@@ -95,7 +95,7 @@ RESEND_API_KEY=
 GOOGLE_OAUTH_CLIENT_ID=
 SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
-SUPABASE_STORAGE_BUCKET=event-covers
+SUPABASE_STORAGE_BUCKET=event-images
 EVENT_IMAGE_MAX_UPLOAD_SIZE=5242880
 HUEY_NAME=event-api
 HUEY_WORKERS=1
@@ -122,7 +122,7 @@ RESEND_API_KEY=your-resend-api-key
 GOOGLE_OAUTH_CLIENT_ID=your-google-web-client-id.apps.googleusercontent.com
 SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
-SUPABASE_STORAGE_BUCKET=event-covers
+SUPABASE_STORAGE_BUCKET=event-images
 EVENT_IMAGE_MAX_UPLOAD_SIZE=5242880
 HUEY_NAME=event-api
 HUEY_IMMEDIATE=True
@@ -274,7 +274,7 @@ Event cover images are stored in Supabase Storage. The API stores the object pat
 Create a public Supabase Storage bucket named by `SUPABASE_STORAGE_BUCKET`, defaulting to:
 
 ```txt
-event-covers
+event-images
 ```
 
 Upload or replace a cover image as the event organizer:
