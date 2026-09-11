@@ -17,6 +17,7 @@ class Event(models.Model):
     location = models.CharField(max_length=255)
     date_time = models.DateTimeField(db_index=True) # Stores the date and time of the event
     capacity = models.PositiveIntegerField(default=100)
+    image_path = models.CharField(max_length=500, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

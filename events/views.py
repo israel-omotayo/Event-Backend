@@ -6,6 +6,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import generics, status
+from rest_framework.parsers import MultiPartParser
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -13,6 +14,7 @@ from rest_framework.views import APIView
 from accounts.permissions import IsOrganizer, IsOrganizerOwner
 from .models import Event, Registration, WaitlistEntry
 from .serializers import (
+    EventImageUploadSerializer,
     EventSerializer,
     RegistrationCancelSerializer,
     RegistrationSerializer,
@@ -20,11 +22,15 @@ from .serializers import (
 )
 from .services import (
     RegistrationError,
+    EventImageError,
+    EventImageStorageError,
     WaitlistError,
     cancel_registration,
     cancel_waitlist_entry,
     join_event_waitlist,
     register_user_for_event,
+    remove_event_image,
+    replace_event_image,
 )
 
 # Create your views here.
@@ -125,6 +131,63 @@ class EventDetailView(generics.RetrieveUpdateDestroyAPIView):
             return [AllowAny()]
 
         return [IsAuthenticated(), IsOrganizerOwner()]
+
+
+class EventImageView(APIView):
+
+    serializer_class = EventSerializer
+    parser_classes = [MultiPartParser]
+    permission_classes = [IsAuthenticated, IsOrganizerOwner]
+
+    def get_object(self):
+        event = get_object_or_404(Event, pk=self.kwargs["pk"])
+        self.check_object_permissions(self.request, event)
+        return event
+
+    @extend_schema(
+        summary="Upload or replace an event cover image",
+        request=EventImageUploadSerializer,
+        responses={
+            200: EventSerializer,
+            400: OpenApiResponse(description="Invalid image upload."),
+            401: OpenApiResponse(description="Authentication credentials were not provided."),
+            403: OpenApiResponse(description="Only the event organizer can upload the image."),
+            404: OpenApiResponse(description="Event not found."),
+        },
+    )
+    def put(self, request, pk):
+        event = self.get_object()
+        image = request.FILES.get("image")
+        if image is None:
+            return Response(
+                {"image": "This field is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            event = replace_event_image(event=event, file_obj=image)
+        except EventImageStorageError as exc:
+            return Response(
+                {"image": str(exc)},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        except EventImageError as exc:
+            return Response({"image": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(EventSerializer(event).data)
+
+    @extend_schema(
+        summary="Delete an event cover image",
+        responses={
+            200: EventSerializer,
+            401: OpenApiResponse(description="Authentication credentials were not provided."),
+            403: OpenApiResponse(description="Only the event organizer can delete the image."),
+            404: OpenApiResponse(description="Event not found."),
+        },
+    )
+    def delete(self, request, pk):
+        event = remove_event_image(event=self.get_object())
+        return Response(EventSerializer(event).data)
 
 
 class EventRegisterView(APIView):

@@ -1,7 +1,14 @@
+import logging
+import uuid
+
+from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 from django.utils import timezone
+from PIL import Image, UnidentifiedImageError
 
 from .models import Event, Registration, WaitlistEntry
+from .storage import StorageError, delete_event_image, upload_event_image
 from .tasks import (
     send_registration_cancelled_email_task,
     send_registration_confirmed_email_task,
@@ -11,12 +18,105 @@ from .tasks import (
 )
 
 
+logger = logging.getLogger(__name__)
+ALLOWED_IMAGE_FORMATS_BY_CONTENT_TYPE = {
+    "image/jpeg": "JPEG",
+    "image/png": "PNG",
+    "image/webp": "WEBP",
+}
+
+
 class RegistrationError(Exception):
     pass
 
 
 class WaitlistError(Exception):
     pass
+
+
+class EventImageError(Exception):
+    pass
+
+
+class EventImageStorageError(EventImageError):
+    pass
+
+
+def validate_event_image(file_obj):
+    content_type = getattr(file_obj, "content_type", "")
+    if content_type not in settings.EVENT_IMAGE_ALLOWED_CONTENT_TYPES:
+        raise EventImageError("Upload a JPEG, PNG, or WebP image.")
+
+    if file_obj.size > settings.EVENT_IMAGE_MAX_UPLOAD_SIZE:
+        max_size_mb = settings.EVENT_IMAGE_MAX_UPLOAD_SIZE // (1024 * 1024)
+        raise EventImageError(f"Image must be {max_size_mb}MB or smaller.")
+
+    try:
+        file_obj.seek(0)
+        with Image.open(file_obj) as image:
+            image.verify()
+            image_format = image.format
+    except (OSError, UnidentifiedImageError) as exc:
+        raise EventImageError("Upload a valid image file.") from exc
+    finally:
+        file_obj.seek(0)
+
+    expected_format = ALLOWED_IMAGE_FORMATS_BY_CONTENT_TYPE[content_type]
+    if image_format != expected_format:
+        raise EventImageError("Image file type does not match its content.")
+
+
+def build_event_image_path(*, event, file_obj):
+    extension = settings.EVENT_IMAGE_ALLOWED_CONTENT_TYPES[file_obj.content_type]
+    return f"events/{event.pk}/cover/{uuid.uuid4().hex}{extension}"
+
+
+def delete_event_image_after_commit(path):
+    try:
+        delete_event_image(path)
+    except (ImproperlyConfigured, StorageError):
+        logger.exception("Failed to delete old event image from storage: %s", path)
+
+
+@transaction.atomic
+def replace_event_image(*, event, file_obj):
+    locked_event = Event.objects.select_for_update().get(pk=event.pk)
+    validate_event_image(file_obj)
+
+    old_image_path = locked_event.image_path
+    new_image_path = build_event_image_path(event=locked_event, file_obj=file_obj)
+    try:
+        upload_event_image(
+            path=new_image_path,
+            file_obj=file_obj,
+            content_type=file_obj.content_type,
+        )
+    except ImproperlyConfigured as exc:
+        raise EventImageStorageError("Image storage is not configured.") from exc
+    except StorageError as exc:
+        raise EventImageStorageError("Image upload failed. Please try again.") from exc
+
+    locked_event.image_path = new_image_path
+    locked_event.save(update_fields=["image_path"])
+
+    if old_image_path:
+        transaction.on_commit(lambda: delete_event_image_after_commit(old_image_path))
+
+    return locked_event
+
+
+@transaction.atomic
+def remove_event_image(*, event):
+    locked_event = Event.objects.select_for_update().get(pk=event.pk)
+    old_image_path = locked_event.image_path
+
+    if not old_image_path:
+        return locked_event
+
+    locked_event.image_path = ""
+    locked_event.save(update_fields=["image_path"])
+    transaction.on_commit(lambda: delete_event_image_after_commit(old_image_path))
+    return locked_event
 
 
 @transaction.atomic

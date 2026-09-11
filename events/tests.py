@@ -1,19 +1,41 @@
+from io import BytesIO
 from unittest.mock import patch
 
-from django.contrib.auth import get_user_model
+import requests
 from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import AccessToken
+from PIL import Image
 
 from accounts.models import Profile
 from .models import Event, Registration, WaitlistEntry
+from .storage import StorageError, upload_event_image
 
 
 User = get_user_model()
+
+
+def make_test_image_file(name="cover.png", content_type="image/png", image_format="PNG"):
+    image_bytes = BytesIO()
+    image = Image.new("RGB", (1, 1), color="white")
+    image.save(image_bytes, format=image_format)
+    return SimpleUploadedFile(
+        name,
+        image_bytes.getvalue(),
+        content_type=content_type,
+    )
+
+
+class FakeStorageResponse:
+    def __init__(self, status_code=200, text=""):
+        self.status_code = status_code
+        self.text = text
 
 
 class EventApiTests(APITestCase):
@@ -279,6 +301,281 @@ class EventApiTests(APITestCase):
         self.event.refresh_from_db()
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertNotEqual(self.event.title, "Hijacked")
+
+    @override_settings(
+        SUPABASE_URL="https://project.supabase.co",
+        SUPABASE_STORAGE_BUCKET="event-covers",
+    )
+    def test_event_detail_returns_public_image_url(self):
+        self.event.image_path = "events/1/cover/test.png"
+        self.event.save(update_fields=["image_path"])
+
+        response = self.client.get(reverse("event-detail", args=[self.event.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["image_path"], self.event.image_path)
+        self.assertEqual(
+            response.data["image_url"],
+            "https://project.supabase.co/storage/v1/object/public/event-covers/events/1/cover/test.png",
+        )
+
+    @override_settings(
+        SUPABASE_URL="https://project.supabase.co",
+        SUPABASE_SERVICE_ROLE_KEY="service-role-key",
+    )
+    def test_organizer_can_upload_event_image(self):
+        self.make_organizer(self.user)
+        self.event.organizer = self.user
+        self.event.save(update_fields=["organizer"])
+        self.authenticate()
+        image = make_test_image_file()
+
+        with (
+            patch("events.services.build_event_image_path", return_value="events/1/cover/new.png"),
+            patch("events.services.upload_event_image") as upload_event_image,
+        ):
+            response = self.client.put(
+                reverse("event-image", args=[self.event.id]),
+                {"image": image},
+                format="multipart",
+            )
+
+        self.event.refresh_from_db()
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(self.event.image_path, "events/1/cover/new.png")
+        self.assertEqual(response.data["image_path"], "events/1/cover/new.png")
+        upload_event_image.assert_called_once()
+        self.assertEqual(upload_event_image.call_args.kwargs["path"], "events/1/cover/new.png")
+        self.assertEqual(upload_event_image.call_args.kwargs["content_type"], "image/png")
+
+    @override_settings(
+        SUPABASE_URL="https://project.supabase.co",
+        SUPABASE_SERVICE_ROLE_KEY="service-role-key",
+    )
+    def test_storage_upload_retries_after_connection_error(self):
+        image = make_test_image_file()
+
+        with patch(
+            "events.storage.requests.post",
+            side_effect=[
+                requests.ConnectionError("connection reset"),
+                FakeStorageResponse(status_code=200),
+            ],
+        ) as post:
+            path = upload_event_image(
+                path="events/1/cover/new.png",
+                file_obj=image,
+                content_type="image/png",
+            )
+
+        self.assertEqual(path, "events/1/cover/new.png")
+        self.assertEqual(post.call_count, 2)
+
+    @override_settings(
+        SUPABASE_URL="https://project.supabase.co",
+        SUPABASE_SERVICE_ROLE_KEY="service-role-key",
+    )
+    def test_event_image_upload_returns_bad_gateway_when_storage_fails(self):
+        self.make_organizer(self.user)
+        self.event.organizer = self.user
+        self.event.save(update_fields=["organizer"])
+        self.authenticate()
+        image = make_test_image_file()
+
+        with patch(
+            "events.services.upload_event_image",
+            side_effect=StorageError("Image upload failed."),
+        ):
+            response = self.client.put(
+                reverse("event-image", args=[self.event.id]),
+                {"image": image},
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertEqual(response.data["image"], "Image upload failed. Please try again.")
+
+    @override_settings(
+        SUPABASE_URL="https://project.supabase.co",
+        SUPABASE_SERVICE_ROLE_KEY="service-role-key",
+    )
+    def test_replacing_event_image_deletes_old_image_after_commit(self):
+        self.make_organizer(self.user)
+        self.event.organizer = self.user
+        self.event.image_path = "events/1/cover/old.png"
+        self.event.save(update_fields=["organizer", "image_path"])
+        self.authenticate()
+        image = make_test_image_file()
+
+        with (
+            patch("events.services.build_event_image_path", return_value="events/1/cover/new.png"),
+            patch("events.services.upload_event_image"),
+            patch("events.services.delete_event_image") as delete_event_image,
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.put(
+                    reverse("event-image", args=[self.event.id]),
+                    {"image": image},
+                    format="multipart",
+                )
+
+        self.event.refresh_from_db()
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(self.event.image_path, "events/1/cover/new.png")
+        delete_event_image.assert_called_once_with("events/1/cover/old.png")
+
+    def test_attendee_cannot_upload_event_image(self):
+        self.event.organizer = self.user
+        self.event.save(update_fields=["organizer"])
+        self.authenticate()
+        image = make_test_image_file()
+
+        with patch("events.services.upload_event_image") as upload_event_image:
+            response = self.client.put(
+                reverse("event-image", args=[self.event.id]),
+                {"image": image},
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        upload_event_image.assert_not_called()
+
+    def test_organizer_cannot_upload_another_organizers_event_image(self):
+        other_user = User.objects.create_user(username="imageowner", password="password123")
+        self.make_organizer(self.user)
+        self.make_organizer(other_user)
+        self.event.organizer = other_user
+        self.event.save(update_fields=["organizer"])
+        self.authenticate()
+        image = make_test_image_file()
+
+        with patch("events.services.upload_event_image") as upload_event_image:
+            response = self.client.put(
+                reverse("event-image", args=[self.event.id]),
+                {"image": image},
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        upload_event_image.assert_not_called()
+
+    def test_event_image_upload_requires_image_file(self):
+        self.make_organizer(self.user)
+        self.event.organizer = self.user
+        self.event.save(update_fields=["organizer"])
+        self.authenticate()
+
+        response = self.client.put(reverse("event-image", args=[self.event.id]), {}, format="multipart")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["image"], "This field is required.")
+
+    def test_event_image_upload_rejects_invalid_content_type(self):
+        self.make_organizer(self.user)
+        self.event.organizer = self.user
+        self.event.save(update_fields=["organizer"])
+        self.authenticate()
+        image = SimpleUploadedFile(
+            "cover.txt",
+            b"not-an-image",
+            content_type="text/plain",
+        )
+
+        with patch("events.services.upload_event_image") as upload_event_image:
+            response = self.client.put(
+                reverse("event-image", args=[self.event.id]),
+                {"image": image},
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["image"], "Upload a JPEG, PNG, or WebP image.")
+        upload_event_image.assert_not_called()
+
+    def test_event_image_upload_rejects_invalid_image_bytes(self):
+        self.make_organizer(self.user)
+        self.event.organizer = self.user
+        self.event.save(update_fields=["organizer"])
+        self.authenticate()
+        image = SimpleUploadedFile(
+            "cover.png",
+            b"not-actually-an-image",
+            content_type="image/png",
+        )
+
+        with patch("events.services.upload_event_image") as upload_event_image:
+            response = self.client.put(
+                reverse("event-image", args=[self.event.id]),
+                {"image": image},
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["image"], "Upload a valid image file.")
+        upload_event_image.assert_not_called()
+
+    def test_event_image_upload_rejects_mismatched_image_content_type(self):
+        self.make_organizer(self.user)
+        self.event.organizer = self.user
+        self.event.save(update_fields=["organizer"])
+        self.authenticate()
+        image = make_test_image_file(
+            name="cover.jpg",
+            content_type="image/jpeg",
+            image_format="PNG",
+        )
+
+        with patch("events.services.upload_event_image") as upload_event_image:
+            response = self.client.put(
+                reverse("event-image", args=[self.event.id]),
+                {"image": image},
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["image"], "Image file type does not match its content.")
+        upload_event_image.assert_not_called()
+
+    @override_settings(EVENT_IMAGE_MAX_UPLOAD_SIZE=3)
+    def test_event_image_upload_rejects_large_file(self):
+        self.make_organizer(self.user)
+        self.event.organizer = self.user
+        self.event.save(update_fields=["organizer"])
+        self.authenticate()
+        image = SimpleUploadedFile(
+            "cover.jpg",
+            b"large",
+            content_type="image/jpeg",
+        )
+
+        with patch("events.services.upload_event_image") as upload_event_image:
+            response = self.client.put(
+                reverse("event-image", args=[self.event.id]),
+                {"image": image},
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Image must be", response.data["image"])
+        upload_event_image.assert_not_called()
+
+    def test_organizer_can_delete_event_image(self):
+        self.make_organizer(self.user)
+        self.event.organizer = self.user
+        self.event.image_path = "events/1/cover/old.png"
+        self.event.save(update_fields=["organizer", "image_path"])
+        self.authenticate()
+
+        with patch("events.services.delete_event_image") as delete_event_image:
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.delete(reverse("event-image", args=[self.event.id]))
+
+        self.event.refresh_from_db()
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(self.event.image_path, "")
+        self.assertEqual(response.data["image_path"], "")
+        self.assertEqual(response.data["image_url"], "")
+        delete_event_image.assert_called_once_with("events/1/cover/old.png")
 
     @override_settings(DEBUG=True)
     def test_user_registration_requires_email_verification_before_jwt_tokens(self):

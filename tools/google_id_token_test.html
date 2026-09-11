@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Google ID Token Tester</title>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Arial, sans-serif;
+    }
+
+    body {
+      margin: 0;
+      background: #f6f7f9;
+      color: #1f2937;
+    }
+
+    main {
+      width: min(920px, calc(100% - 32px));
+      margin: 40px auto;
+    }
+
+    section {
+      background: #ffffff;
+      border: 1px solid #d9dde5;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+
+    label {
+      display: block;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+
+    input,
+    textarea {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid #c7ccd5;
+      border-radius: 6px;
+      padding: 10px;
+      font: inherit;
+      margin-bottom: 14px;
+    }
+
+    textarea {
+      min-height: 160px;
+      resize: vertical;
+      font-family: Consolas, monospace;
+      font-size: 13px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 6px;
+      background: #2563eb;
+      color: #ffffff;
+      padding: 10px 14px;
+      font: inherit;
+      cursor: pointer;
+      margin-right: 8px;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
+    pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #111827;
+      color: #f9fafb;
+      border-radius: 6px;
+      padding: 12px;
+      min-height: 80px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Google ID Token Tester</h1>
+
+    <section>
+      <label for="clientId">Google OAuth Client ID</label>
+      <input id="clientId" placeholder="your-google-web-client-id.apps.googleusercontent.com">
+
+      <label for="backendUrl">Backend Google Auth URL</label>
+      <input id="backendUrl" value="http://127.0.0.1:8000/auth/google/">
+
+      <button id="loadButton" type="button">Load Google Button</button>
+      <div id="googleButton" style="margin-top: 16px;"></div>
+    </section>
+
+    <section>
+      <label for="idToken">Google ID Token</label>
+      <textarea id="idToken" readonly></textarea>
+      <button id="copyButton" type="button" disabled>Copy ID Token</button>
+      <button id="sendButton" type="button" disabled>Send To Backend</button>
+    </section>
+
+    <section>
+      <label>Backend Response</label>
+      <pre id="responseBox">Waiting...</pre>
+    </section>
+  </main>
+
+  <script>
+    const clientIdInput = document.getElementById("clientId");
+    const backendUrlInput = document.getElementById("backendUrl");
+    const loadButton = document.getElementById("loadButton");
+    const googleButton = document.getElementById("googleButton");
+    const idTokenInput = document.getElementById("idToken");
+    const copyButton = document.getElementById("copyButton");
+    const sendButton = document.getElementById("sendButton");
+    const responseBox = document.getElementById("responseBox");
+
+    function setResponse(value) {
+      responseBox.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    }
+
+    function handleGoogleCredential(response) {
+      idTokenInput.value = response.credential || "";
+      copyButton.disabled = !idTokenInput.value;
+      sendButton.disabled = !idTokenInput.value;
+      setResponse("ID token received. Copy it into Postman or send it to the backend.");
+    }
+
+    loadButton.addEventListener("click", () => {
+      const clientId = clientIdInput.value.trim();
+      if (!clientId) {
+        setResponse("Enter your Google OAuth Client ID first.");
+        return;
+      }
+
+      googleButton.innerHTML = "";
+      google.accounts.id.initialize({
+        client_id: clientId,
+        callback: handleGoogleCredential,
+      });
+      google.accounts.id.renderButton(googleButton, {
+        theme: "outline",
+        size: "large",
+        text: "continue_with",
+      });
+      setResponse("Google button loaded. Click it to get an ID token.");
+    });
+
+    copyButton.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(idTokenInput.value);
+      setResponse("ID token copied.");
+    });
+
+    sendButton.addEventListener("click", async () => {
+      const backendUrl = backendUrlInput.value.trim();
+      if (!backendUrl) {
+        setResponse("Enter the backend Google auth URL first.");
+        return;
+      }
+
+      const res = await fetch(backendUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          id_token: idTokenInput.value,
+        }),
+      });
+      const data = await res.json();
+      setResponse(data);
+    });
+  </script>
+</body>
+</html>

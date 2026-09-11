@@ -4,6 +4,7 @@ from .views import (
     CancelWaitlistEntryView,
     CancelRegistrationView,
     EventDetailView,
+    EventImageView,
     EventListView,
     EventRegisterView,
     EventWaitlistView,
@@ -15,6 +16,7 @@ from .views import (
 urlpatterns = [
     path("events/", EventListView.as_view(), name="event-list"),
     path("events/<int:pk>/", EventDetailView.as_view(), name="event-detail"),
+    path("events/<int:pk>/image/", EventImageView.as_view(), name="event-image"),
     path("events/<int:pk>/register/", EventRegisterView.as_view(), name="event-register"),
     path("events/<int:pk>/waitlist/", EventWaitlistView.as_view(), name="event-waitlist"),
     path("my-registrations/", MyRegistrationsView.as_view(), name="my-registrations"),

@@ -87,6 +87,8 @@ Accept: application/json
 | `PUT` | `/events/<id>/` | Organizer owner | Replace one of the authenticated organizer's events |
 | `PATCH` | `/events/<id>/` | Organizer owner | Update one of the authenticated organizer's events |
 | `DELETE` | `/events/<id>/` | Organizer owner | Delete one of the authenticated organizer's events |
+| `PUT` | `/events/<id>/image/` | Organizer owner | Upload or replace an event cover image |
+| `DELETE` | `/events/<id>/image/` | Organizer owner | Delete an event cover image |
 | `POST` | `/events/<id>/register/` | Yes | Register the authenticated user for an event |
 | `POST` | `/events/<id>/waitlist/` | Yes | Join the waitlist for a full event |
 | `GET` | `/my-registrations/` | Yes | View active registrations for the authenticated user |
@@ -341,6 +343,8 @@ Example response:
       "location": "Lagos",
       "date_time": "2026-08-13T10:00:00Z",
       "capacity": 50,
+      "image_path": "",
+      "image_url": "",
       "created_at": "2026-08-06T10:00:00Z",
       "spots_left": 50,
       "is_full": false
@@ -408,6 +412,30 @@ Content-Type: application/json
 {
   "title": "Updated Django Workshop"
 }
+```
+
+Upload or replace your own event cover image as an organizer:
+
+```http
+PUT /events/1/image/
+Authorization: Bearer your_access_token_here
+Content-Type: multipart/form-data
+```
+
+Form field:
+
+```txt
+image
+```
+
+Allowed upload types are JPEG, PNG, and WebP. The default max file size is 5 MB. The API verifies the real image bytes before uploading. Event responses include `image_path` and `image_url`.
+
+Delete your own event cover image:
+
+```http
+DELETE /events/1/image/
+Authorization: Bearer your_access_token_here
+Accept: application/json
 ```
 
 Register for an event:
@@ -490,7 +518,7 @@ No request body is required.
 
 ## Creating Events
 
-Events are created by admins from the Django admin panel:
+Events can be created by organizers through the API or by admins from the Django admin panel:
 
 ```txt
 http://127.0.0.1:8000/admin/

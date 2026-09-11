@@ -12,6 +12,7 @@ This project is a reusable API/backend template for event registration, built wi
 - Google ID-token auth that returns local JWT tokens
 - Attendee and organizer roles
 - Organizer-only event creation and owner-only event updates/deletes
+- Supabase Storage event cover images
 - Authenticated event registration
 - Explicit waitlist flow for full events
 - Authenticated view of a user's active registrations
@@ -33,6 +34,7 @@ This project is a reusable API/backend template for event registration, built wi
 - Google ID token verification
 - Huey for background tasks
 - Sentry SDK for error monitoring
+- Supabase Storage for event cover images
 - drf-spectacular for Swagger/OpenAPI docs
 
 ## Project Structure
@@ -54,6 +56,7 @@ event_reg/
     admin.py
     tests.py
     tasks.py
+    storage.py
   accounts/
     models.py
     admin.py
@@ -90,6 +93,10 @@ DEFAULT_FROM_EMAIL=Event API <noreply@example.com>
 EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
 RESEND_API_KEY=
 GOOGLE_OAUTH_CLIENT_ID=
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+SUPABASE_STORAGE_BUCKET=event-covers
+EVENT_IMAGE_MAX_UPLOAD_SIZE=5242880
 HUEY_NAME=event-api
 HUEY_WORKERS=1
 HUEY_WORKER_TYPE=thread
@@ -113,6 +120,10 @@ DEFAULT_FROM_EMAIL=Event API <noreply@yourdomain.com>
 EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
 RESEND_API_KEY=your-resend-api-key
 GOOGLE_OAUTH_CLIENT_ID=your-google-web-client-id.apps.googleusercontent.com
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
+SUPABASE_STORAGE_BUCKET=event-covers
+EVENT_IMAGE_MAX_UPLOAD_SIZE=5242880
 HUEY_NAME=event-api
 HUEY_IMMEDIATE=True
 HUEY_WORKERS=1
@@ -186,6 +197,8 @@ Detailed endpoint examples are in `API_DOCS.md`.
 | `PUT` | `/events/<id>/` | Replace an event as its organizer |
 | `PATCH` | `/events/<id>/` | Update an event as its organizer |
 | `DELETE` | `/events/<id>/` | Delete an event as its organizer |
+| `PUT` | `/events/<id>/image/` | Upload or replace an event cover image as its organizer |
+| `DELETE` | `/events/<id>/image/` | Delete an event cover image as its organizer |
 | `POST` | `/events/<id>/register/` | Register for an event |
 | `POST` | `/events/<id>/waitlist/` | Join waitlist for a full event |
 | `GET` | `/my-registrations/` | View current user's active registrations |
@@ -253,6 +266,32 @@ Registration cancellation requires confirmation:
 ```
 
 If an event is full, `POST /events/<id>/register/` returns `event_full`; clients should show a join-waitlist action and call `POST /events/<id>/waitlist/`.
+
+## Event Images
+
+Event cover images are stored in Supabase Storage. The API stores the object path in `Event.image_path` and returns a computed public `image_url` in event responses.
+
+Create a public Supabase Storage bucket named by `SUPABASE_STORAGE_BUCKET`, defaulting to:
+
+```txt
+event-covers
+```
+
+Upload or replace a cover image as the event organizer:
+
+```http
+PUT /events/1/image/
+Authorization: Bearer your_access_token_here
+Content-Type: multipart/form-data
+```
+
+Use form field:
+
+```txt
+image
+```
+
+Allowed types are JPEG, PNG, and WebP. The default max size is 5 MB. The API verifies the real image bytes with Pillow before uploading. The backend uploads with `SUPABASE_SERVICE_ROLE_KEY`, so never expose that key in frontend code.
 
 ## Background Emails
 

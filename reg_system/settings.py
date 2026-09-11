@@ -174,6 +174,16 @@ EMAIL_VERIFICATION_RESEND_COOLDOWN = timedelta(minutes=1)
 EMAIL_VERIFICATION_MAX_RESEND_COOLDOWN = timedelta(days=1)
 GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
 
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+SUPABASE_STORAGE_BUCKET = os.environ.get("SUPABASE_STORAGE_BUCKET", "event-images")
+EVENT_IMAGE_MAX_UPLOAD_SIZE = int(os.environ.get("EVENT_IMAGE_MAX_UPLOAD_SIZE", str(5 * 1024 * 1024)))
+EVENT_IMAGE_ALLOWED_CONTENT_TYPES = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+}
+
 HUEY_CONNECTION = {
     "dbname": DATABASES["default"]["NAME"],
     "user": DATABASES["default"]["USER"],
@@ -281,4 +291,5 @@ SPECTACULAR_SETTINGS = {
     "DESCRIPTION": "API for viewing events, registering users, and managing event registrations.",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
+    "COMPONENT_SPLIT_REQUEST": True,
 }
