@@ -9,7 +9,12 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from .models import Profile
-from .services import encode_user_id, get_resend_cooldown, hash_verification_code
+from .services import (
+    encode_user_id,
+    get_resend_cooldown,
+    hash_verification_code,
+    hash_verification_token,
+)
 
 
 User = get_user_model()
@@ -40,6 +45,7 @@ class AccountAuthFlowTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["detail"], "Verification code sent to your email.")
+        self.assertIn("verification_token", response.data)
         self.assertEqual(response.data["first_name"], "New")
         self.assertEqual(response.data["last_name"], "User")
         self.assertNotIn("access", response.data)
@@ -51,6 +57,10 @@ class AccountAuthFlowTests(APITestCase):
         self.assertEqual(
             user.profile.email_verification_code_hash,
             hash_verification_code("123456"),
+        )
+        self.assertEqual(
+            user.profile.email_verification_token_hash,
+            hash_verification_token(response.data["verification_token"]),
         )
         self.assertIsNotNone(user.profile.email_verification_sent_at)
         send_email_task.assert_called_once_with(email="new@example.com", code="123456")
@@ -114,7 +124,7 @@ class AccountAuthFlowTests(APITestCase):
 
     def test_registration_blocks_fresh_unverified_duplicate_email(self):
         with patch("accounts.services.generate_verification_code", return_value="123456"):
-            self.client.post(
+            register_response = self.client.post(
                 reverse("auth-register"),
                 {
                     "username": "pending",
@@ -187,7 +197,7 @@ class AccountAuthFlowTests(APITestCase):
 
     def test_email_verification_activates_user_and_clears_code(self):
         with patch("accounts.services.generate_verification_code", return_value="123456"):
-            self.client.post(
+            register_response = self.client.post(
                 reverse("auth-register"),
                 {
                     "username": "verifyme",
@@ -199,7 +209,11 @@ class AccountAuthFlowTests(APITestCase):
 
         response = self.client.post(
             reverse("auth-verify"),
-            {"email": "  VERIFY@Example.com  ", "code": "123456"},
+            {
+                "email": "  VERIFY@Example.com  ",
+                "code": "123456",
+                "verification_token": register_response.data["verification_token"],
+            },
             format="json",
         )
 
@@ -209,12 +223,13 @@ class AccountAuthFlowTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertTrue(user.is_active)
         self.assertIsNone(user.profile.email_verification_code_hash)
+        self.assertIsNone(user.profile.email_verification_token_hash)
         self.assertIsNone(user.profile.email_verification_sent_at)
         self.assertEqual(user.profile.email_verification_attempts, 0)
 
     def test_email_verification_rejects_wrong_code_and_counts_attempt(self):
         with patch("accounts.services.generate_verification_code", return_value="123456"):
-            self.client.post(
+            register_response = self.client.post(
                 reverse("auth-register"),
                 {
                     "username": "wrongcode",
@@ -226,7 +241,11 @@ class AccountAuthFlowTests(APITestCase):
 
         response = self.client.post(
             reverse("auth-verify"),
-            {"email": "wrong@example.com", "code": "654321"},
+            {
+                "email": "wrong@example.com",
+                "code": "654321",
+                "verification_token": register_response.data["verification_token"],
+            },
             format="json",
         )
 
@@ -239,7 +258,7 @@ class AccountAuthFlowTests(APITestCase):
 
     def test_email_verification_rejects_expired_code(self):
         with patch("accounts.services.generate_verification_code", return_value="123456"):
-            self.client.post(
+            register_response = self.client.post(
                 reverse("auth-register"),
                 {
                     "username": "expired",
@@ -255,7 +274,11 @@ class AccountAuthFlowTests(APITestCase):
 
         response = self.client.post(
             reverse("auth-verify"),
-            {"email": "expired@example.com", "code": "123456"},
+            {
+                "email": "expired@example.com",
+                "code": "123456",
+                "verification_token": register_response.data["verification_token"],
+            },
             format="json",
         )
 
@@ -266,7 +289,7 @@ class AccountAuthFlowTests(APITestCase):
 
     def test_resend_verification_code_replaces_code_and_sets_cooldown(self):
         with patch("accounts.services.generate_verification_code", return_value="123456"):
-            self.client.post(
+            register_response = self.client.post(
                 reverse("auth-register"),
                 {
                     "username": "resend",
@@ -283,7 +306,10 @@ class AccountAuthFlowTests(APITestCase):
             with self.captureOnCommitCallbacks(execute=True):
                 response = self.client.post(
                     reverse("auth-verification-resend"),
-                    {"email": "  RESEND@Example.com  "},
+                    {
+                        "email": "  RESEND@Example.com  ",
+                        "verification_token": register_response.data["verification_token"],
+                    },
                     format="json",
                 )
 
@@ -299,18 +325,69 @@ class AccountAuthFlowTests(APITestCase):
         self.assertIsNotNone(user.profile.email_verification_cooldown_until)
         send_email_task.assert_called_once_with(email="resend@example.com", code="222222")
 
-    def test_resend_verification_code_returns_generic_response_for_unknown_email(self):
+    def test_resend_verification_code_rejects_unknown_email_without_pending_session(self):
         response = self.client.post(
             reverse("auth-verification-resend"),
-            {"email": "missing@example.com"},
+            {
+                "email": "missing@example.com",
+                "verification_token": "not-a-real-session",
+            },
             format="json",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(
-            response.data["detail"],
-            "If an unverified account exists, a new code has been sent.",
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], "Invalid verification session.")
+
+    def test_resend_verification_code_rejects_wrong_verification_token(self):
+        with patch("accounts.services.generate_verification_code", return_value="123456"):
+            self.client.post(
+                reverse("auth-register"),
+                {
+                    "username": "tokenresend",
+                    "email": "tokenresend@example.com",
+                    "password": "StrongPass123!",
+                },
+                format="json",
+            )
+
+        response = self.client.post(
+            reverse("auth-verification-resend"),
+            {
+                "email": "tokenresend@example.com",
+                "verification_token": "wrong-token",
+            },
+            format="json",
         )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], "Invalid verification session.")
+
+    def test_email_verification_rejects_wrong_verification_token(self):
+        with patch("accounts.services.generate_verification_code", return_value="123456"):
+            self.client.post(
+                reverse("auth-register"),
+                {
+                    "username": "tokenverify",
+                    "email": "tokenverify@example.com",
+                    "password": "StrongPass123!",
+                },
+                format="json",
+            )
+
+        response = self.client.post(
+            reverse("auth-verify"),
+            {
+                "email": "tokenverify@example.com",
+                "code": "123456",
+                "verification_token": "wrong-token",
+            },
+            format="json",
+        )
+
+        user = User.objects.get(email="tokenverify@example.com")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], "Invalid verification session.")
+        self.assertFalse(user.is_active)
 
     def test_resend_cooldown_uses_exponential_backoff_after_first_three_resends(self):
         self.assertEqual(get_resend_cooldown(1), timezone.timedelta(minutes=1))

@@ -20,6 +20,7 @@ class Profile(models.Model):
     )
     google_sub = models.CharField(max_length=255, unique=True, null=True, blank=True)
     email_verification_code_hash = models.CharField(max_length=64, null=True, blank=True)
+    email_verification_token_hash = models.CharField(max_length=64, null=True, blank=True)
     email_verification_sent_at = models.DateTimeField(null=True, blank=True)
     email_verification_attempts = models.PositiveSmallIntegerField(default=0)
     email_verification_resend_count = models.PositiveIntegerField(default=0)

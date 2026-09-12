@@ -60,11 +60,14 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
-        return register_user_with_verification(**validated_data)
+        user, verification_token = register_user_with_verification(**validated_data)
+        self.verification_token = verification_token
+        return user
 
 
 class EmailVerificationSerializer(serializers.Serializer):
     email = serializers.EmailField()
+    verification_token = serializers.CharField()
     code = serializers.RegexField(
         regex=r"^\d{6}$",
         error_messages={"invalid": "Enter a valid 6-digit verification code."},
@@ -76,6 +79,7 @@ class EmailVerificationSerializer(serializers.Serializer):
 
 class ResendVerificationCodeSerializer(serializers.Serializer):
     email = serializers.EmailField()
+    verification_token = serializers.CharField()
 
     def validate_email(self, value):
         return normalize_email(value)

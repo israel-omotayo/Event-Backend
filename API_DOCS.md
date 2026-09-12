@@ -24,8 +24,8 @@ Authorization: Bearer <access_token>
 | Method | Endpoint | Auth | Body |
 | --- | --- | --- | --- |
 | `POST` | `/auth/register/` | No | `username`, `email`, `password`, optional name fields |
-| `POST` | `/auth/verify/` | No | `email`, `code` |
-| `POST` | `/auth/verification/resend/` | No | `email` |
+| `POST` | `/auth/verify/` | No | `email`, `code`, `verification_token` |
+| `POST` | `/auth/verification/resend/` | No | `email`, `verification_token` |
 | `POST` | `/auth/token/` | No | `email`, `password` |
 | `POST` | `/auth/google/` | No | `id_token` |
 | `POST` | `/auth/token/refresh/` | No | `refresh` |
@@ -44,12 +44,24 @@ Register:
 }
 ```
 
+Registration returns a `verification_token`. Keep it client-side only for the pending verification screen.
+
 Verify:
 
 ```json
 {
   "email": "john@example.com",
-  "code": "123456"
+  "code": "123456",
+  "verification_token": "token-from-register-response"
+}
+```
+
+Resend verification code:
+
+```json
+{
+  "email": "john@example.com",
+  "verification_token": "token-from-register-response"
 }
 ```
 

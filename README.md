@@ -137,6 +137,8 @@ Authorization: Bearer <access_token>
 
 New users are attendees. Promote organizers from Django admin by editing their profile.
 
+Registration returns a `verification_token`. The frontend must send that token with `/auth/verify/` and `/auth/verification/resend/` together with the email/code.
+
 ## Storage
 
 Event images upload through:

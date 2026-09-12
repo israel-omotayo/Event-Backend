@@ -33,12 +33,24 @@ def generate_verification_code():
     return f"{secrets.randbelow(1_000_000):06d}"
 
 
+def generate_verification_token():
+    return secrets.token_urlsafe(32)
+
+
 def hash_verification_code(code):
     return hashlib.sha256(code.encode("utf-8")).hexdigest()
 
 
+def hash_verification_token(token):
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 def code_matches(*, code, code_hash):
     return hmac.compare_digest(hash_verification_code(code), code_hash)
+
+
+def verification_token_matches(*, token, token_hash):
+    return hmac.compare_digest(hash_verification_token(token), token_hash)
 
 
 def encode_user_id(user):
@@ -178,6 +190,7 @@ def authenticate_with_google(*, id_token):
 
     profile.google_sub = google_sub
     profile.email_verification_code_hash = None
+    profile.email_verification_token_hash = None
     profile.email_verification_sent_at = None
     profile.email_verification_attempts = 0
     profile.email_verification_resend_count = 0
@@ -186,6 +199,7 @@ def authenticate_with_google(*, id_token):
         update_fields=[
             "google_sub",
             "email_verification_code_hash",
+            "email_verification_token_hash",
             "email_verification_sent_at",
             "email_verification_attempts",
             "email_verification_resend_count",
@@ -276,16 +290,23 @@ def register_user_with_verification(
         user = User.objects.create_user(**user_data)
 
     code = generate_verification_code()
-    save_verification_code(user=user, code=code)
+    verification_token = generate_verification_token()
+    save_verification_code(
+        user=user,
+        code=code,
+        verification_token=verification_token,
+    )
     transaction.on_commit(
         lambda: send_verification_code_email_task(email=user.email, code=code)
     )
-    return user
+    return user, verification_token
 
 
-def save_verification_code(*, user, code, increment_resend=False):
+def save_verification_code(*, user, code, verification_token=None, increment_resend=False):
     profile = user.profile
     profile.email_verification_code_hash = hash_verification_code(code)
+    if verification_token is not None:
+        profile.email_verification_token_hash = hash_verification_token(verification_token)
     profile.email_verification_sent_at = timezone.now()
     profile.email_verification_attempts = 0
 
@@ -301,6 +322,7 @@ def save_verification_code(*, user, code, increment_resend=False):
     profile.save(
         update_fields=[
             "email_verification_code_hash",
+            "email_verification_token_hash",
             "email_verification_sent_at",
             "email_verification_attempts",
             "email_verification_resend_count",
@@ -310,7 +332,7 @@ def save_verification_code(*, user, code, increment_resend=False):
     )
 
 
-def verify_email_code(*, email, code):
+def verify_email_code(*, email, code, verification_token):
     validation_error = None
 
     with transaction.atomic():
@@ -325,8 +347,18 @@ def verify_email_code(*, email, code):
 
         profile = user.profile
 
-        if not profile.email_verification_code_hash or not profile.email_verification_sent_at:
+        if (
+            not profile.email_verification_code_hash
+            or not profile.email_verification_token_hash
+            or not profile.email_verification_sent_at
+        ):
             raise serializers.ValidationError({"detail": "Invalid verification code."})
+
+        if not verification_token_matches(
+            token=verification_token,
+            token_hash=profile.email_verification_token_hash,
+        ):
+            raise serializers.ValidationError({"detail": "Invalid verification session."})
 
         if profile.email_verification_attempts >= Profile.MAX_EMAIL_VERIFICATION_ATTEMPTS:
             raise serializers.ValidationError({"detail": "Too many invalid verification attempts."})
@@ -346,6 +378,7 @@ def verify_email_code(*, email, code):
             user.save(update_fields=["is_active"])
 
             profile.email_verification_code_hash = None
+            profile.email_verification_token_hash = None
             profile.email_verification_sent_at = None
             profile.email_verification_attempts = 0
             profile.email_verification_resend_count = 0
@@ -353,6 +386,7 @@ def verify_email_code(*, email, code):
             profile.save(
                 update_fields=[
                     "email_verification_code_hash",
+                    "email_verification_token_hash",
                     "email_verification_sent_at",
                     "email_verification_attempts",
                     "email_verification_resend_count",
@@ -421,7 +455,7 @@ def confirm_password_reset(*, uid, token, new_password):
 
 
 @transaction.atomic
-def resend_verification_code(*, email):
+def resend_verification_code(*, email, verification_token):
     user = (
         User.objects.select_for_update()
         .filter(email__iexact=normalize_email(email))
@@ -429,9 +463,18 @@ def resend_verification_code(*, email):
     )
 
     if not user or user.is_active:
-        return False
+        raise serializers.ValidationError({"detail": "Invalid verification session."})
 
     profile = user.profile
+    if (
+        not profile.email_verification_token_hash
+        or not verification_token_matches(
+            token=verification_token,
+            token_hash=profile.email_verification_token_hash,
+        )
+    ):
+        raise serializers.ValidationError({"detail": "Invalid verification session."})
+
     if profile.email_verification_cooldown_until:
         if timezone.now() < profile.email_verification_cooldown_until:
             raise serializers.ValidationError(

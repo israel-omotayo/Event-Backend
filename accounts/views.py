@@ -58,6 +58,7 @@ class UserRegistrationView(generics.CreateAPIView):
                 "first_name": user.first_name,
                 "last_name": user.last_name,
                 "email": user.email,
+                "verification_token": serializer.verification_token,
                 "detail": "Verification code sent to your email.",
             },
             status=status.HTTP_201_CREATED,
