@@ -1,4 +1,6 @@
+from io import BytesIO
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 from django.contrib.auth.tokens import default_token_generator
 from django.contrib.auth import get_user_model
@@ -8,6 +10,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from .email import send_email
 from .models import Profile
 from .services import (
     encode_user_id,
@@ -64,6 +67,35 @@ class AccountAuthFlowTests(APITestCase):
         )
         self.assertIsNotNone(user.profile.email_verification_sent_at)
         send_email_task.assert_called_once_with(email="new@example.com", code="123456")
+
+    @override_settings(
+        DEBUG=False,
+        RESEND_API_KEY="re_test",
+        DEFAULT_FROM_EMAIL="Event API <noreply@coreapp.name.ng>",
+    )
+    def test_resend_sender_sets_user_agent_and_reports_error_body(self):
+        captured_request = None
+
+        def fake_urlopen(resend_request, timeout):
+            nonlocal captured_request
+            captured_request = resend_request
+            raise HTTPError(
+                resend_request.full_url,
+                403,
+                "Forbidden",
+                {},
+                BytesIO(b'{"message":"from address is not verified"}'),
+            )
+
+        with patch("accounts.email.request.urlopen", side_effect=fake_urlopen):
+            with self.assertRaisesMessage(RuntimeError, "from address is not verified"):
+                send_email(
+                    to_email="user@example.com",
+                    subject="Subject",
+                    text_content="Text",
+                )
+
+        self.assertEqual(captured_request.get_header("User-agent"), "event-registration-api/1.0")
 
     def test_registration_rejects_duplicate_email_case_insensitively(self):
         User.objects.create_user(

@@ -1,6 +1,6 @@
 import json
 import logging
-from urllib import request
+from urllib import error, request
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
@@ -33,14 +33,19 @@ def _send_via_resend(*, to_email, subject, text_content, html_content=""):
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
+            "User-Agent": "event-registration-api/1.0",
         },
         method="POST",
     )
 
-    with request.urlopen(resend_request, timeout=RESEND_TIMEOUT_SECONDS) as response:
-        if response.status not in (200, 201, 202):
-            body = response.read(200).decode("utf-8", errors="replace")
-            raise RuntimeError(f"Resend API error {response.status}: {body}")
+    try:
+        with request.urlopen(resend_request, timeout=RESEND_TIMEOUT_SECONDS) as response:
+            if response.status not in (200, 201, 202):
+                body = response.read(500).decode("utf-8", errors="replace")
+                raise RuntimeError(f"Resend API error {response.status}: {body}")
+    except error.HTTPError as exc:
+        body = exc.read(500).decode("utf-8", errors="replace")
+        raise RuntimeError(f"Resend API error {exc.code}: {body}") from exc
 
 
 def _send_via_django(*, to_email, subject, text_content, html_content=""):
